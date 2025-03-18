@@ -141,6 +141,37 @@ router.get('/vapi-bridge/:trackingId', async (req, res) => {
 });
 
 /**
+ * VAPI Bridge POST endpoint - To handle Twilio POST webhooks
+ */
+router.post('/vapi-bridge/:trackingId', async (req, res) => {
+  try {
+    const { trackingId } = req.params;
+    console.log(`VAPI bridge POST request received for tracking ID: ${trackingId}`);
+    console.log('Request body:', req.body);
+    
+    if (!trackingId) {
+      return res.status(400).json({ error: 'Tracking ID is required' });
+    }
+    
+    const result = await createVapiBridge(trackingId);
+    
+    // Set content type to XML
+    res.set('Content-Type', 'text/xml');
+    res.send(result.twiml);
+  } catch (error) {
+    console.error('VAPI bridge POST error:', error);
+    
+    // Send a basic TwiML response in case of error
+    res.set('Content-Type', 'text/xml');
+    res.send(`
+      <Response>
+        <Say>We're sorry, but an error occurred while connecting to our AI assistant.</Say>
+      </Response>
+    `);
+  }
+});
+
+/**
  * Get TwiML for a call using tracking ID (fallback method)
  */
 router.get('/twiml/:trackingId', async (req, res) => {

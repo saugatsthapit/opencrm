@@ -110,6 +110,8 @@ export const placeCall = async (
         lead_sequence_id: leadSequenceId,
         step_id: stepId
       }),
+      credentials: 'include',
+      mode: 'cors',
     });
 
     if (!response.ok) {
@@ -145,6 +147,8 @@ export const placeCallLegacy = async (
         lead_sequence_id: leadSequenceId,
         step_id: stepId
       }),
+      credentials: 'include',
+      mode: 'cors',
     });
 
     if (!response.ok) {
@@ -169,6 +173,8 @@ export const getCallStatus = async (callId: string) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include',
+      mode: 'cors',
     });
 
     if (!response.ok) {
@@ -193,6 +199,8 @@ export const getCallHistory = async (leadId: string) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include',
+      mode: 'cors',
     });
 
     if (!response.ok) {

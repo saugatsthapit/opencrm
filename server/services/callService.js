@@ -410,22 +410,59 @@ const createVapiBridge = async (trackingId) => {
         vapiConfig = memoryConfig;
       }
     }
+
+    // Helper function to escape XML special characters
+    const escapeXml = (str) => {
+      if (!str) return '';
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+    };
     
-    // This TwiML will bridge the call to VAPI
+    // Create a proper Twilio Response object using the twilio library
+    const VoiceResponse = twilio.twiml.VoiceResponse;
+    const response = new VoiceResponse();
+    
+    // Add initial greeting
+    response.say('Please wait while we connect you with our AI assistant.');
+    
+    // Create Connect verb with Stream
+    const connect = response.connect();
+    
+    // Create stream URL with proper escaping
+    const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}/${trackingId}`;
+    const stream = connect.stream({ url: streamUrl });
+    
+    // Add parameters with proper escaping
+    stream.parameter({
+      name: 'first_message',
+      value: escapeXml(vapiConfig.first_message || 'Hello, how can I help you today?')
+    });
+    
+    stream.parameter({
+      name: 'voice',
+      value: escapeXml(vapiConfig.voice || 'shimmer')
+    });
+    
+    stream.parameter({
+      name: 'model',
+      value: escapeXml(vapiConfig.model || 'gpt-4')
+    });
+    
+    stream.parameter({
+      name: 'context',
+      value: escapeXml(typeof vapiConfig.context === 'string' ? 
+        vapiConfig.context : JSON.stringify(vapiConfig.context || {}))
+    });
+    
+    console.log('Generated VAPI bridge TwiML:', response.toString());
+    
+    // Return the TwiML
     return {
-      twiml: `
-        <Response>
-          <Say>Please wait while we connect you with our AI assistant.</Say>
-          <Connect>
-            <Stream url="wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}/${trackingId}">
-              <Parameter name="first_message" value="${vapiConfig.first_message || 'Hello, how can I help you today?'}"/>
-              <Parameter name="voice" value="${vapiConfig.voice || 'shimmer'}"/>
-              <Parameter name="model" value="${vapiConfig.model || 'gpt-4'}"/>
-              <Parameter name="context" value="${vapiConfig.context || '{}'}"/>
-            </Stream>
-          </Connect>
-        </Response>
-      `
+      twiml: response.toString()
     };
   } catch (error) {
     console.error('Error creating VAPI bridge:', error);
