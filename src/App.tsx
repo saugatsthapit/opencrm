@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import Sequences from './pages/Sequences';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
+import ColdCalling from './pages/ColdCalling';
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/sequences" element={<Sequences />} />
+              <Route path="/cold-calling" element={<ColdCalling />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>

@@ -1,5 +1,6 @@
-import { supabase } from '../config/supabase.js';
-import { sendEmail } from './emailService.js';
+const { supabase } = require('../config/supabase.js');
+const { sendEmail } = require('./emailService.js');
+const { placeCall } = require('./callService.js');
 
 const calculateNextExecution = (waitTime, waitUnit) => {
   const nextExecution = new Date();
@@ -55,6 +56,52 @@ const processEmailStep = async (step, leadSequence, lead) => {
   );
 };
 
+// New function to process call steps
+const processCallStep = async (step, leadSequence, lead) => {
+  console.log(`Processing call step for lead ${lead.id}`);
+  
+  // Validate lead has a phone number
+  if (!lead.phone) {
+    throw new Error('Lead phone number is required for call step');
+  }
+  
+  // Prepare script with placeholders
+  const placeholders = {
+    firstName: lead.first_name || '',
+    lastName: lead.last_name || '',
+    fullName: `${lead.first_name || ''} ${lead.last_name || ''}`.trim(),
+    email: lead.email || '',
+    company: lead.company_name || '',
+    title: lead.title || '',
+    location: lead.location || '',
+    linkedin: lead.linkedin || ''
+  };
+  
+  // Replace placeholders in script
+  const processText = (text) => {
+    if (!text) return '';
+    return Object.entries(placeholders).reduce(
+      (processed, [key, value]) => processed.replace(new RegExp(`{{${key}}}`, 'g'), value),
+      text
+    );
+  };
+  
+  const scriptConfig = step.configuration;
+  const callScript = {
+    greeting: processText(scriptConfig.greeting),
+    introduction: processText(scriptConfig.introduction),
+    talking_points: (scriptConfig.talking_points || []).map(point => processText(point)),
+    questions: (scriptConfig.questions || []).map(question => processText(question)),
+    closing: processText(scriptConfig.closing),
+    caller_phone_number: scriptConfig.caller_phone_number,
+    ai_model: scriptConfig.ai_model || 'gpt-4',
+    voice: scriptConfig.voice || 'shimmer'
+  };
+  
+  // Place the call
+  await placeCall(lead.phone, lead, callScript, leadSequence.id, step.id);
+};
+
 const updateLeadSequence = async (leadSequenceId, updateData) => {
   try {
     const { error } = await supabase
@@ -101,7 +148,7 @@ const retryWithBackoff = async (operation, retries = 0) => {
   }
 };
 
-export const processWorkflowSteps = async () => {
+const processWorkflowSteps = async () => {
   try {
     console.log('Starting workflow processing...');
     
@@ -159,7 +206,8 @@ export const processWorkflowSteps = async () => {
                 title,
                 company_name,
                 location,
-                linkedin
+                linkedin,
+                phone
               )
             `)
             .eq('sequence_id', sequence.id)
@@ -190,7 +238,11 @@ export const processWorkflowSteps = async () => {
                 console.log(`Processing email step for lead sequence ID: ${leadSequence.id}`);
                 await processEmailStep(currentStep, leadSequence, leadSequence.lead);
                 break;
-              // Manual steps (call, linkedin) are handled by the UI
+              case 'call':
+                console.log(`Processing call step for lead sequence ID: ${leadSequence.id}`);
+                await processCallStep(currentStep, leadSequence, leadSequence.lead);
+                break;
+              // Manual steps (linkedin) are handled by the UI
               default:
                 console.warn(`Unsupported step type: ${currentStep.step_type} for lead sequence ID: ${leadSequence.id}`);
             }
@@ -245,3 +297,5 @@ export const processWorkflowSteps = async () => {
     console.error('Error in workflow processing:', error);
   }
 };
+
+module.exports = { processWorkflowSteps, calculateNextExecution };

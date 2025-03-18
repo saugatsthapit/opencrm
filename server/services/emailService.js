@@ -1,5 +1,5 @@
-import { transporter } from '../config/email.js';
-import { supabase } from '../config/supabase.js';
+const { transporter } = require('../config/email.js');
+const { supabase } = require('../config/supabase.js');
 
 const TRACKING_DOMAIN = process.env.VITE_APP_URL || 'http://localhost:8000';
 console.log(`Using tracking domain: ${TRACKING_DOMAIN}`);
@@ -55,7 +55,7 @@ const addLocalTrackingEvent = (type, trackingId, data = {}) => {
 };
 
 // Helper to get local tracking events
-export const getLocalTrackingEvents = (type, trackingId) => {
+const getLocalTrackingEvents = (type, trackingId) => {
   const store = type === 'open' ? localTrackingStore.opens : localTrackingStore.clicks;
   return store.get(trackingId) || [];
 };
@@ -113,7 +113,7 @@ const sendEmailWithRetry = async (mailOptions, retries = 0) => {
   }
 };
 
-export const sendEmail = async (to, subject, content, placeholders, leadSequenceId = null, stepId = null) => {
+const sendEmail = async (to, subject, content, placeholders, leadSequenceId = null, stepId = null) => {
   try {
     console.log('Starting email send process for:', { to, subject });
 
@@ -228,7 +228,7 @@ export const sendEmail = async (to, subject, content, placeholders, leadSequence
   }
 };
 
-export const verifyEmailConfig = async () => {
+const verifyEmailConfig = async () => {
   try {
     console.log('Verifying email configuration...');
     await transporter.verify();
@@ -240,7 +240,7 @@ export const verifyEmailConfig = async () => {
   }
 };
 
-export const handleBounce = async (trackingId, reason) => {
+const handleBounce = async (trackingId, reason) => {
   try {
     const { error } = await supabase
       .from('email_tracking')
@@ -257,7 +257,7 @@ export const handleBounce = async (trackingId, reason) => {
   }
 };
 
-export const handleOpen = async (trackingId) => {
+const handleOpen = async (trackingId) => {
   try {
     console.log(`Handling email open for tracking ID: ${trackingId}`);
     
@@ -309,7 +309,7 @@ export const handleOpen = async (trackingId) => {
   }
 };
 
-export const handleClick = async (trackingId, url, userAgent, ipAddress) => {
+const handleClick = async (trackingId, url, userAgent, ipAddress) => {
   try {
     console.log(`Handling link click for tracking ID: ${trackingId}, URL: ${url}`);
     
@@ -363,4 +363,13 @@ export const handleClick = async (trackingId, url, userAgent, ipAddress) => {
     addLocalTrackingEvent('click', trackingId, { url, userAgent, ipAddress });
     console.log(`Falling back to in-memory tracking due to unexpected error: ${error.message}`);
   }
+};
+
+module.exports = {
+  sendEmail,
+  verifyEmailConfig,
+  handleBounce,
+  handleOpen,
+  handleClick,
+  getLocalTrackingEvents
 };

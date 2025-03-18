@@ -1,6 +1,7 @@
 import React from 'react';
 import { GripVertical, Trash } from 'lucide-react';
 import { SequenceStep, STEP_TYPES, WAIT_TIME_UNITS, DEFAULT_DECISION_PATHS } from './types';
+import CallScriptEditor from '../CallScriptEditor';
 
 interface StepConfigurationProps {
   steps: SequenceStep[];
@@ -32,7 +33,16 @@ const StepConfiguration: React.FC<StepConfigurationProps> = ({
           ...path,
           id: Math.random().toString(),
           next_step: steps.length + 1
-        }))
+        })),
+        call_script: type === 'call' ? {
+          greeting: "Hello, this is {{firstName}} from {{company}}. How are you doing today?",
+          introduction: "I'm calling to discuss how our solution might help with your business needs.",
+          talking_points: ["Our solution has helped similar companies increase efficiency by 30%"],
+          questions: ["What challenges are you currently facing in your business?"],
+          closing: "Thank you for your time. I'll follow up with an email summarizing what we discussed.",
+          voice: "shimmer",
+          ai_model: "gpt-4"
+        } : undefined
       }
     };
 
@@ -175,7 +185,25 @@ const StepConfiguration: React.FC<StepConfigurationProps> = ({
                 </>
               )}
 
-              {(step.step_type === 'call' || step.step_type === 'linkedin_request') && (
+              {step.step_type === 'call' && (
+                <div>
+                  <h4 className="text-sm font-medium text-gray-700 mb-3">Call Script Configuration</h4>
+                  <CallScriptEditor 
+                    value={step.configuration.call_script || {
+                      greeting: "Hello, this is {{firstName}} from {{company}}. How are you doing today?",
+                      introduction: "I'm calling to discuss how our solution might help with your business needs.",
+                      talking_points: ["Our solution has helped similar companies increase efficiency by 30%"],
+                      questions: ["What challenges are you currently facing in your business?"],
+                      closing: "Thank you for your time. I'll follow up with an email summarizing what we discussed.",
+                      voice: "shimmer",
+                      ai_model: "gpt-4"
+                    }}
+                    onChange={(callScript) => updateStepConfig(step.id, { call_script: callScript })}
+                  />
+                </div>
+              )}
+
+              {(step.step_type === 'linkedin_request') && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Notes</label>
                   <div className="mt-1 relative">

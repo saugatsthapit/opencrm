@@ -1,10 +1,10 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+const nodemailer = require('nodemailer');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 // Create reusable transporter with proper configuration for Zoho SMTP
-export const transporter = nodemailer.createTransport({
+const transporter = nodemailer.createTransport({
   host: process.env.VITE_EMAIL_HOST,
   port: parseInt(process.env.VITE_EMAIL_PORT),
   secure: process.env.VITE_EMAIL_SECURE === 'true',
@@ -47,9 +47,11 @@ const testConnection = async () => {
 // Initialize connection test
 testConnection();
 
-export const getEmailConfig = () => ({
+const getEmailConfig = () => ({
   host: process.env.VITE_EMAIL_HOST,
   port: parseInt(process.env.VITE_EMAIL_PORT),
   secure: process.env.VITE_EMAIL_SECURE === 'true',
   user: process.env.VITE_EMAIL_USER,
 });
+
+module.exports = { transporter, getEmailConfig };

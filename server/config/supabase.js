@@ -1,10 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
+const { createClient } = require('@supabase/supabase-js');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 // Use service_role key for server-side operations to bypass RLS
-export const supabase = createClient(
+const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
   process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY,
   {
@@ -14,3 +14,5 @@ export const supabase = createClient(
     }
   }
 );
+
+module.exports = { supabase };

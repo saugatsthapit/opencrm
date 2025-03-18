@@ -33,6 +33,17 @@ export interface DecisionPath {
   next_step: number | null;
 }
 
+export interface CallScript {
+  greeting: string;
+  introduction: string;
+  talking_points: string[];
+  questions: string[];
+  closing: string;
+  voice: string;
+  ai_model: string;
+  caller_phone_number?: string;
+}
+
 export interface SequenceStep {
   id: string;
   step_type: 'email' | 'linkedin_request' | 'call';
@@ -45,6 +56,7 @@ export interface SequenceStep {
     wait_time?: number;
     wait_time_unit?: 'minutes' | 'hours' | 'days';
     paths?: DecisionPath[];
+    call_script?: CallScript;
   };
 }
 

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Users, ListChecks, BarChart3, Settings } from 'lucide-react';
+import { Users, ListChecks, BarChart3, Settings, Phone } from 'lucide-react';
 
 const Navbar = () => {
   return (
@@ -26,6 +26,13 @@ const Navbar = () => {
             >
               <ListChecks className="h-4 w-4" />
               <span>Sequences</span>
+            </Link>
+            <Link
+              to="/cold-calling"
+              className="flex items-center space-x-1 text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+            >
+              <Phone className="h-4 w-4" />
+              <span>Cold Calling</span>
             </Link>
             <Link
               to="/analytics"

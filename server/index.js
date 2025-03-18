@@ -1,8 +1,9 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import emailRoutes from './routes/email.js';
-import { processWorkflowSteps } from './services/workflowService.js';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const emailRoutes = require('./routes/email.js');
+const callRoutes = require('./routes/calls.js');
+const { processWorkflowSteps } = require('./services/workflowService.js');
 
 dotenv.config();
 
@@ -12,6 +13,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api/v1/email', emailRoutes);
+app.use('/api/v1/calls', callRoutes);
 
 // Run workflow processor every minute
 setInterval(processWorkflowSteps, 60000);

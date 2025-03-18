@@ -1,7 +1,7 @@
-import express from 'express';
-import { getEmailConfig } from '../config/email.js';
-import { sendEmail, verifyEmailConfig, handleOpen, handleClick, handleBounce, getLocalTrackingEvents } from '../services/emailService.js';
-import { supabase } from '../config/supabase.js';
+const express = require('express');
+const { getEmailConfig } = require('../config/email.js');
+const { sendEmail, verifyEmailConfig, handleOpen, handleClick, handleBounce, getLocalTrackingEvents } = require('../services/emailService.js');
+const { supabase } = require('../config/supabase.js');
 
 const router = express.Router();
 
@@ -185,4 +185,4 @@ router.get('/test-tracking', (req, res) => {
   res.status(200).json({ success: true, message: 'Tracking domain is accessible' });
 });
 
-export default router;
+module.exports = router;
