@@ -1,6 +1,60 @@
 import { supabase } from './supabase';
 
-const API_BASE_URL = '/api/v1/calls';
+// Determine the API base URL based on the current environment
+const getApiBaseUrl = () => {
+  // If we're on the production site (fastcrm.netlify.app)
+  if (window.location.hostname === 'fastcrm.netlify.app') {
+    // Check if the user has configured a local server with ngrok in localStorage
+    const storedNgrokUrl = localStorage.getItem('ngrok_url');
+    
+    if (storedNgrokUrl) {
+      console.log(`Using configured ngrok URL: ${storedNgrokUrl}`);
+      return `${storedNgrokUrl}/api/v1/calls`;
+    }
+    
+    // Ask the user if they want to set up a ngrok URL
+    setTimeout(() => {
+      if (!localStorage.getItem('ngrok_prompt_shown')) {
+        const ngrokUrl = prompt(
+          'To test cold calling from the production site, enter your ngrok URL (e.g., https://abcd1234.ngrok.io).\n' +
+          'Leave blank to skip this step.\n' +
+          'You can change this later by running localStorage.setItem("ngrok_url", "your-url") in the browser console.'
+        );
+        
+        localStorage.setItem('ngrok_prompt_shown', 'true');
+        
+        if (ngrokUrl) {
+          localStorage.setItem('ngrok_url', ngrokUrl);
+          alert(`Ngrok URL set to ${ngrokUrl}. Refresh the page to use it.`);
+          window.location.reload();
+        }
+      }
+    }, 1000);
+    
+    // This is where your production API would be hosted
+    // For now, we'll just show an error message when trying to make calls
+    console.warn('API server is not deployed for production yet. Please use the local development environment for testing or configure a ngrok URL.');
+    return '/api/v1/calls'; // This will be handled by our fetch override in index.html
+  }
+  
+  // For local development - will be proxied to localhost:8002
+  return '/api/v1/calls';
+};
+
+const API_BASE_URL = getApiBaseUrl();
+
+// Helper function to clear ngrok settings (for debugging)
+export const clearNgrokSettings = () => {
+  localStorage.removeItem('ngrok_url');
+  localStorage.removeItem('ngrok_prompt_shown');
+  alert('Ngrok settings cleared. Refresh the page to reset.');
+};
+
+// Helper function to set ngrok URL manually
+export const setNgrokUrl = (url: string) => {
+  localStorage.setItem('ngrok_url', url);
+  alert(`Ngrok URL set to ${url}. Refresh the page to use it.`);
+};
 
 /**
  * Place a call to a lead using the configured script and Twilio
@@ -13,6 +67,14 @@ export const placeCall = async (
   stepId?: string
 ) => {
   try {
+    // Check if we're on production without a properly configured ngrok
+    if (window.location.hostname === 'fastcrm.netlify.app' && !localStorage.getItem('ngrok_url')) {
+      throw new Error(
+        'Cold calling can only be tested from the production site with a properly configured ngrok URL. ' +
+        'Please run the app locally or configure a ngrok URL by running setNgrokUrl("your-url") from the browser console.'
+      );
+    }
+    
     // Handle both lead ID string and lead object
     let lead;
     if (typeof leadId === 'string') {

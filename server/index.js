@@ -8,12 +8,37 @@ const { processWorkflowSteps } = require('./services/workflowService.js');
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// Configure CORS to allow requests from both localhost and the production domain
+const corsOptions = {
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000',
+    'https://fastcrm.netlify.app'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 // Routes
 app.use('/api/v1/email', emailRoutes);
 app.use('/api/v1/calls', callRoutes);
+
+// Add a test endpoint to confirm the server is reachable
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'up', 
+    message: 'API server is running',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0',
+    origin: req.headers.origin || 'unknown'
+  });
+});
 
 // Run workflow processor every minute
 setInterval(processWorkflowSteps, 60000);

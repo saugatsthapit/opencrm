@@ -197,3 +197,87 @@ The application will start in development mode:
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+# Cold Calling Configuration Guide
+
+## Setup for Testing Cold Calling
+
+To properly test the cold calling feature with Twilio, follow these steps:
+
+### Local Development Setup
+
+1. Run your local API server:
+   ```
+   npm run server
+   ```
+
+2. Run your local frontend:
+   ```
+   npm run client
+   ```
+
+3. The local frontend will automatically proxy API requests to your local server.
+
+### Testing with the Production Frontend
+
+If you want to test with the production frontend at `https://fastcrm.netlify.app`, you need to:
+
+1. Run your local API server:
+   ```
+   npm run server
+   ```
+
+2. Install and set up ngrok:
+   
+   a. Sign up for a free ngrok account at https://dashboard.ngrok.com/signup
+   
+   b. After signing up, get your auth token from https://dashboard.ngrok.com/get-started/your-authtoken
+   
+   c. Configure ngrok with your auth token:
+   ```
+   npx ngrok authtoken YOUR_AUTH_TOKEN
+   ```
+   
+   d. Start ngrok to create a public URL for your local server:
+   ```
+   npx ngrok http 8002
+   ```
+   
+   e. Copy the HTTPS URL provided by ngrok (e.g., `https://abcd1234.ngrok.io`).
+
+3. Update your `.env` file with this URL:
+   ```
+   VITE_APP_URL=https://your-ngrok-url
+   ```
+
+4. Restart your server.
+
+5. Now you can use the production frontend at `https://fastcrm.netlify.app` and it will connect to your local API server through ngrok.
+
+## Why This Setup Is Necessary
+
+- Twilio requires publicly accessible webhook URLs to handle call events.
+- When testing locally, your server is only accessible from your machine.
+- The ngrok tool creates a secure tunnel to your local server, making it accessible from the internet.
+
+## Deploying to Production
+
+For a complete production setup, you would need to:
+
+1. Deploy your frontend to Netlify (already done at `https://fastcrm.netlify.app`).
+2. Deploy your backend API server to a hosting service like Heroku, Render, or DigitalOcean.
+3. Configure your frontend to use the URL of your deployed backend.
+
+## Twilio Configuration
+
+Make sure your Twilio account has the following:
+
+1. A verified phone number to make outbound calls.
+2. Proper credentials (Account SID, Auth Token) in your `.env` file.
+3. Sufficient funds in your Twilio account for making real calls.
+
+## Troubleshooting
+
+- If calls are not connecting, check the server logs for Twilio error messages.
+- Ensure your ngrok URL is properly set in the `.env` file.
+- Verify that the CORS settings allow connections from your frontend domain.

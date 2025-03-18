@@ -4,7 +4,41 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vite + React + TS</title>
+    <title>FastCRM</title>
+    <!-- Production API Redirection Script -->
+    <script>
+      // Check if we're on production
+      if (window.location.hostname === 'fastcrm.netlify.app') {
+        // Store original fetch
+        const originalFetch = window.fetch;
+        
+        // Override fetch to handle API calls
+        window.fetch = function(url, options) {
+          // Check if this is an API call
+          if (typeof url === 'string' && url.startsWith('/api/')) {
+            console.warn(`Production environment detected. API calls to ${url} will fail because the backend is not deployed.`);
+            console.warn('For testing cold calling functionality, please use the local development environment.');
+            
+            // For debugging - log what would have been sent
+            console.log('Request that would be sent:', { url, options });
+            
+            // Return a mock response for API calls to prevent unhandled errors
+            return Promise.resolve({
+              ok: false,
+              status: 404,
+              statusText: 'Not Found - API not deployed to production',
+              json: () => Promise.resolve({
+                error: 'API not deployed to production',
+                message: 'This feature can only be tested in the local development environment.'
+              })
+            });
+          }
+          
+          // For non-API calls, use the original fetch
+          return originalFetch.apply(this, arguments);
+        };
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>
