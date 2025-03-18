@@ -1,5 +1,6 @@
 const { supabase } = require('../config/supabase.js');
 const dotenv = require('dotenv');
+const { VapiClient } = require('@vapi-ai/server-sdk');
 const twilio = require('twilio');
 const fetch = require('node-fetch');
 
@@ -16,10 +17,13 @@ const twilioClient = twilio(
 );
 const TWILIO_PHONE_NUMBER = process.env.VITE_TWILIO_PHONE_NUMBER;
 
+// Initialize VAPI client with API key
+const vapiClient = new VapiClient({ token: VAPI_API_KEY });
+
 // Track call statuses in memory for quick access
 const callStatusMap = new Map();
 
-// Add this function to get a proper webhook URL that works with Twilio
+// Add this function to get a proper webhook URL that works with external services
 const getPublicWebhookUrl = (path) => {
   const configuredUrl = process.env.VITE_APP_URL;
   // If the URL is localhost or not set, use the production URL
@@ -30,7 +34,7 @@ const getPublicWebhookUrl = (path) => {
 };
 
 /**
- * Place an outbound call using Twilio but VAPI for voice AI
+ * Place an outbound call using VAPI (Voice AI API)
  * @param {string} phone_number - The phone number to call
  * @param {object} lead - The lead data for the call
  * @param {object} callScript - The call script configuration
@@ -44,6 +48,10 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     
     if (!phone_number) {
       throw new Error('Phone number is required for call step');
+    }
+
+    if (!VAPI_API_KEY) {
+      throw new Error('VAPI API key is required for cold calling. Please set VITE_VAPI_API_KEY in your .env file.');
     }
 
     // Create tracking record
@@ -100,183 +108,123 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       console.log('Using local tracking as fallback:', tracking);
     }
 
-    // Prepare the assistant's context with lead information
-    const assistantContext = {
-      lead: {
-        name: `${lead.first_name || ''} ${lead.last_name || ''}`.trim(),
-        firstName: lead.first_name || '',
-        lastName: lead.last_name || '',
-        company: lead.company_name || '',
-        title: lead.title || '',
-        email: lead.email || '',
-        location: lead.location || ''
-      },
-      script: {
-        introduction: callScript.introduction || '',
-        talking_points: callScript.talking_points || [],
-        questions: callScript.questions || [],
-        closing: callScript.closing || ''
-      },
-      tracking_id: tracking.tracking_id
-    };
+    // Format greeting with variable substitution
+    let greeting = callScript.greeting || `Hello, I'm calling about our CRM software that can help improve your team's productivity.`;
+    
+    // Replace variables in the greeting
+    const leadName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim();
+    greeting = greeting.replace(/{{firstName}}/g, lead.first_name || '')
+                      .replace(/{{lastName}}/g, lead.last_name || '')
+                      .replace(/{{name}}/g, leadName)
+                      .replace(/{{company}}/g, lead.company_name || 'your company');
 
+    // Webhook configuration for receiving call events
+    const webhookUrl = getPublicWebhookUrl('/api/v1/calls/vapi-webhook');
+    console.log(`Webhook URL for VAPI events: ${webhookUrl}`);
+    
+    // Check if real calls are enabled (either in production or explicitly enabled)
+    const enableRealCalls = process.env.NODE_ENV === 'production' || process.env.VITE_ENABLE_REAL_CALLS === 'true';
+    
     let callData;
     
-    // HYBRID APPROACH: Use VAPI for voice AI but initiate via webhook
-    if (VAPI_API_KEY) {
-      // Create a webhook URL that will trigger VAPI when Twilio connects the call
-      const localWebhookUrl = `${process.env.VITE_APP_URL}/api/v1/calls/vapi-bridge/${tracking.tracking_id}`;
-      // Get a public URL that Twilio can access
-      const webhookUrl = getPublicWebhookUrl(`/api/v1/calls/vapi-bridge/${tracking.tracking_id}`);
-      
-      // For development with localhost, provide clear guidance
-      if (process.env.VITE_APP_URL && process.env.VITE_APP_URL.includes('localhost')) {
-        console.warn('⚠️ Local URL detected but using production URL for Twilio webhooks');
-        console.warn(`Local URL: ${localWebhookUrl}`);
-        console.warn(`Production URL for Twilio: ${webhookUrl}`);
-      }
-      
-      console.log(`Webhook URL for VAPI bridge: ${webhookUrl}`);
-      
-      // Store VAPI configuration for later use in the bridge
-      const vapiConfig = {
-        model: callScript.ai_model || 'gpt-4',
-        voice: callScript.voice || 'shimmer',
-        first_message: callScript.greeting || `Hello, this is calling about ${assistantContext.script.introduction}`,
-        context: JSON.stringify(assistantContext)
-      };
-      
-      // Store in call_tracking for later retrieval if the column exists
-      if (tracking.id) {
-        try {
-          const { error: updateError } = await supabase
-            .from('call_tracking')
-            .update({ 
-              vapi_config: vapiConfig
-            })
-            .eq('id', tracking.id);
+    if (enableRealCalls) {
+      try {
+        console.log('Making REAL call to', phone_number);
+        
+        // Make the call using VAPI SDK
+        callData = await vapiClient.calls.create({
+          // Call details
+          name: `Call to ${leadName || phone_number}`,
+          
+          // Create a transient assistant
+          assistant: {
+            name: `Cold Call Assistant for ${leadName || 'Lead'}`,
+            firstMessage: greeting,
+            firstMessageMode: "assistant-speaks-first",
+            
+            // Voice configuration
+            voice: {
+              provider: "eleven-labs",  // Or another provider like "azure"
+              voiceId: callScript.voice || "shimmer" 
+            },
+            
+            // Model configuration
+            model: {
+              provider: "openai",
+              model: callScript.ai_model || "gpt-4",
+              // Add instructions based on the call script
+              messages: [
+                {
+                  role: "system",
+                  content: `You are a professional cold caller for a CRM software company. 
+You're calling ${leadName || 'a potential customer'} at ${lead.company_name || 'a company'}.
+Here's your script:
+- Introduction: ${callScript.introduction || ''}
+- Talking Points: ${callScript.talking_points ? callScript.talking_points.join(', ') : ''}
+- Questions to Ask: ${callScript.questions ? callScript.questions.join(', ') : ''}
+- Closing Message: ${callScript.closing || ''}
 
-          if (updateError) {
-            // If the column doesn't exist, simply log it but continue
-            if (updateError.code === 'PGRST204') {
-              console.log('Note: vapi_config column not found in call_tracking table. Storing config in memory only.');
-              // Store in memory instead
-              callStatusMap.set(`config_${tracking.tracking_id}`, vapiConfig);
-            } else {
-              console.error('Failed to update call tracking with VAPI config:', updateError);
+Remember to:
+1. Be professional and courteous
+2. Listen carefully to responses
+3. Address any concerns
+4. Avoid being too pushy
+5. Collect relevant information about their needs
+6. Clearly explain the next steps if they're interested
+
+First, introduce yourself and the purpose of your call. Then, proceed with the conversation.`
+                }
+              ]
+            },
+            
+            // Maximum duration in seconds
+            maxDurationSeconds: 600,
+            
+            // Timeout if nobody speaks for 30 seconds
+            silenceTimeoutSeconds: 30,
+            
+            // Optional server webhook for real-time events
+            serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
+            server: {
+              url: webhookUrl,
+              timeoutSeconds: 30
+            }
+          },
+          
+          // Customer to call
+          customer: {
+            number: phone_number.startsWith('+') ? phone_number : `+${phone_number}`,
+            name: leadName || 'Lead',
+            // Pass additional context as metadata
+            metadata: {
+              lead_id: lead.id,
+              tracking_id: tracking.tracking_id,
+              lead_sequence_id: leadSequenceId || null,
+              step_id: stepId || null
             }
           }
-        } catch (err) {
-          console.log('Error updating vapi_config, continuing with in-memory storage:', err.message);
-          // Store in memory instead
-          callStatusMap.set(`config_${tracking.tracking_id}`, vapiConfig);
-        }
-      }
-      
-      console.log('Using hybrid approach: Twilio for call, VAPI for conversation');
-      
-      // Check if real calls are enabled (either in production or explicitly enabled)
-      const enableRealCalls = process.env.NODE_ENV === 'production' || process.env.VITE_ENABLE_REAL_CALLS === 'true';
-      
-      if (enableRealCalls) {
-        // Use Twilio to initiate the call
-        console.log(`Making REAL Twilio call to ${phone_number} from ${TWILIO_PHONE_NUMBER}`);
-        try {
-          const call = await twilioClient.calls.create({
-            to: phone_number,
-            from: TWILIO_PHONE_NUMBER,
-            url: webhookUrl,
-            statusCallback: getPublicWebhookUrl('/api/v1/calls/status'),
-            statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-            statusCallbackMethod: 'POST',
-            record: true
-          });
-          callData = {
-            id: call.sid,
-            status: call.status,
-            created_at: new Date().toISOString()
-          };
-          console.log('Real call initiated successfully:', call.sid);
-        } catch (twilioError) {
-          console.error('Twilio call error:', twilioError);
-          // Fall back to simulation if Twilio fails
-          console.log('FALLBACK: Simulating Twilio call due to error');
-          callData = {
-            id: `call_${Date.now()}`,
-            status: 'queued',
-            created_at: new Date().toISOString(),
-            error: twilioError.message
-          };
-        }
-      } else {
-        // Simulated response for development
-        console.log('DEVELOPMENT MODE: Simulating Twilio call with VAPI instead of making real call');
+        });
+        
+        console.log('VAPI call successfully initiated:', callData);
+      } catch (vapiError) {
+        console.error('VAPI call error:', vapiError);
+        // Fall back to simulation if VAPI call fails
+        console.log('FALLBACK: Simulating VAPI call due to error');
         callData = {
-          id: `call_${Date.now()}`,
+          id: `vapi_${Date.now()}`,
           status: 'queued',
-          created_at: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          error: vapiError.message
         };
       }
     } else {
-      // Fallback to basic TwiML if VAPI is not configured
-      console.log('No VAPI API key found. Using basic TwiML instead.');
-      
-      // Generate basic TwiML for the call
-      const localTwimlUrl = `${process.env.VITE_APP_URL}/api/v1/calls/twiml/${tracking.tracking_id}`;
-      // Get a public URL that Twilio can access
-      const twimlBinUrl = getPublicWebhookUrl(`/api/v1/calls/twiml/${tracking.tracking_id}`);
-      
-      // For development with localhost, provide clear guidance
-      if (process.env.VITE_APP_URL && process.env.VITE_APP_URL.includes('localhost')) {
-        console.warn('⚠️ Local URL detected but using production URL for Twilio webhooks');
-        console.warn(`Local URL: ${localTwimlUrl}`);
-        console.warn(`Production URL for Twilio: ${twimlBinUrl}`);
-      }
-      
-      console.log(`TwiML URL: ${twimlBinUrl}`);
-      
-      // Check if real calls are enabled (either in production or explicitly enabled)
-      const enableRealCalls = process.env.NODE_ENV === 'production' || process.env.VITE_ENABLE_REAL_CALLS === 'true';
-      
-      if (enableRealCalls) {
-        // Use Twilio to initiate the call
-        console.log(`Making REAL Twilio call to ${phone_number} from ${TWILIO_PHONE_NUMBER}`);
-        try {
-          const call = await twilioClient.calls.create({
-            to: phone_number,
-            from: TWILIO_PHONE_NUMBER,
-            url: twimlBinUrl,
-            statusCallback: getPublicWebhookUrl('/api/v1/calls/status'),
-            statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-            statusCallbackMethod: 'POST',
-            record: true
-          });
-          callData = {
-            id: call.sid,
-            status: call.status,
-            created_at: new Date().toISOString()
-          };
-          console.log('Real call initiated successfully:', call.sid);
-        } catch (twilioError) {
-          console.error('Twilio call error:', twilioError);
-          // Fall back to simulation if Twilio fails
-          console.log('FALLBACK: Simulating Twilio call due to error');
-          callData = {
-            id: `call_${Date.now()}`,
-            status: 'queued',
-            created_at: new Date().toISOString(),
-            error: twilioError.message
-          };
-        }
-      } else {
-        // Simulated response for development
-        console.log('DEVELOPMENT MODE: Simulating Twilio call instead of making real call');
-        callData = {
-          id: `call_${Date.now()}`,
-          status: 'queued',
-          created_at: new Date().toISOString()
-        };
-      }
+      // Simulated response for development
+      console.log('DEVELOPMENT MODE: Simulating VAPI call instead of making real call');
+      callData = {
+        id: `vapi_${Date.now()}`,
+        status: 'queued',
+        createdAt: new Date().toISOString()
+      };
     }
     
     console.log('Call initiated:', callData);
@@ -287,7 +235,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
         .from('call_tracking')
         .update({ 
           call_id: callData.id,
-          status: callData.status,
+          status: callData.status || 'queued',
           started_at: new Date().toISOString()
         })
         .eq('id', tracking.id);
@@ -299,14 +247,14 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     
     // Store in memory for quick access
     callStatusMap.set(callData.id, {
-      status: callData.status,
+      status: callData.status || 'queued',
       tracking_id: tracking.tracking_id,
       lead_sequence_id: leadSequenceId,
       step_id: stepId
     });
 
     console.log(`Call initiated with ID: ${callData.id}`);
-    return { ...tracking, call_id: callData.id, call_status: callData.status };
+    return { ...tracking, call_id: callData.id, call_status: callData.status || 'queued' };
   } catch (error) {
     console.error('Error in placeCall:', error);
     throw error;
@@ -377,6 +325,21 @@ const createVapiBridge = async (trackingId) => {
       };
     }
     
+    console.log(`Processing VAPI bridge request for tracking ID: ${trackingId}`);
+    
+    // Check memory first for configs
+    let vapiConfig = callStatusMap.get(`config_${trackingId}`);
+    let trackingInfo = callStatusMap.get(`tracking_${trackingId}`);
+    
+    if (vapiConfig) {
+      console.log('Found VAPI config in memory cache for:', trackingId);
+      console.log('VAPI config contents:', JSON.stringify(vapiConfig));
+    }
+    
+    if (trackingInfo) {
+      console.log('Found tracking info in memory cache for:', trackingId);
+    }
+    
     // Fetch the tracking record with VAPI config
     const { data, error } = await supabase
       .from('call_tracking')
@@ -385,29 +348,114 @@ const createVapiBridge = async (trackingId) => {
         lead:leads(*)
       `)
       .eq('tracking_id', trackingId)
-      .single();
+      .maybeSingle(); // Use maybeSingle instead of single to avoid errors
     
-    if (error) {
-      console.error('Error fetching call details for VAPI bridge:', error);
+    if (error || !data) {
+      console.warn(`No tracking record found in database for tracking ID: ${trackingId}`);
+      console.log('Attempting to use memory-cached data instead');
+      
+      // If we have some configuration in memory, use that
+      if (vapiConfig) {
+        console.log('Using memory-cached config for VAPI bridge');
+        // Create TwiML with proper connect/stream structure
+        const VoiceResponse = twilio.twiml.VoiceResponse;
+        const response = new VoiceResponse();
+        
+        // This is important - only a brief initial message
+        response.say('Please wait while we connect you to our AI assistant.');
+        
+        // Setup the connect and stream for VAPI
+        const connect = response.connect();
+        // Make sure the URL is correctly formatted - this is key
+        const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}`;
+        
+        console.log(`Using stream URL: ${streamUrl}`);
+        
+        const stream = connect.stream({
+          url: streamUrl
+        });
+        
+        // Helper function to escape XML special characters
+        const escapeXml = (str) => {
+          if (!str) return '';
+          return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;');
+        };
+        
+        // Add parameters with proper escaping
+        stream.parameter({
+          name: 'first_message',
+          value: escapeXml(vapiConfig.first_message || 'Hello, how can I help you today?')
+        });
+        
+        stream.parameter({
+          name: 'voice',
+          value: escapeXml(vapiConfig.voice || 'shimmer')
+        });
+        
+        stream.parameter({
+          name: 'model',
+          value: escapeXml(vapiConfig.model || 'gpt-4')
+        });
+        
+        // Make sure context is properly stringified and escaped
+        const contextValue = typeof vapiConfig.context === 'string' 
+          ? vapiConfig.context 
+          : JSON.stringify(vapiConfig.context || {});
+          
+        stream.parameter({
+          name: 'context',
+          value: escapeXml(contextValue)
+        });
+        
+        // Add call_id parameter if we have a tracking id
+        if (trackingInfo && trackingInfo.call_id) {
+          stream.parameter({
+            name: 'call_id',
+            value: trackingInfo.call_id
+          });
+        }
+        
+        const finalTwiML = response.toString();
+        console.log('Generated VAPI bridge TwiML:', finalTwiML);
+        
+        return {
+          twiml: finalTwiML
+        };
+      }
+      
+      // If all else fails, return a default response
       return {
-        error: 'Failed to fetch call details',
+        error: 'No configuration found for this call',
         twiml: `
           <Response>
-            <Say>We're sorry, but we couldn't load your call details.</Say>
+            <Say>We could not find your specific configuration. Ending the call.</Say>
           </Response>
         `
       };
     }
     
+    // We found the tracking record in the database
+    console.log('Found tracking record in database:', data.id);
     const phone_number = data.phone_number;
-    let vapiConfig = data.vapi_config || {};
     
-    // If not found in database, try to get from memory
-    if (Object.keys(vapiConfig).length === 0) {
-      const memoryConfig = callStatusMap.get(`config_${trackingId}`);
-      if (memoryConfig) {
-        console.log('Retrieved VAPI config from memory for:', trackingId);
-        vapiConfig = memoryConfig;
+    // If we don't have vapiConfig from memory, get it from the database
+    if (!vapiConfig) {
+      vapiConfig = data.vapi_config || {};
+      
+      // If still not found, create a minimal default config
+      if (Object.keys(vapiConfig).length === 0) {
+        console.log('No VAPI config found, creating minimal default');
+        vapiConfig = {
+          model: 'gpt-4',
+          voice: 'shimmer',
+          first_message: 'Hello, I am calling on behalf of FastCRM. How are you today?',
+          context: '{}'
+        };
       }
     }
 
@@ -426,15 +474,19 @@ const createVapiBridge = async (trackingId) => {
     const VoiceResponse = twilio.twiml.VoiceResponse;
     const response = new VoiceResponse();
     
-    // Add initial greeting
-    response.say('Please wait while we connect you with our AI assistant.');
+    // Brief initial greeting
+    response.say('Please wait while we connect you to our AI assistant.');
     
-    // Create Connect verb with Stream
+    // Create Connect verb with Stream - this is how we connect to VAPI
     const connect = response.connect();
     
-    // Create stream URL with proper escaping
-    const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}/${trackingId}`;
-    const stream = connect.stream({ url: streamUrl });
+    // This is the correct format for the VAPI stream URL - without tracking ID in path
+    const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}`;
+    console.log(`Using stream URL: ${streamUrl}`);
+    
+    const stream = connect.stream({
+      url: streamUrl
+    });
     
     // Add parameters with proper escaping
     stream.parameter({
@@ -452,17 +504,30 @@ const createVapiBridge = async (trackingId) => {
       value: escapeXml(vapiConfig.model || 'gpt-4')
     });
     
+    // Make sure context is properly stringified and escaped
+    const contextValue = typeof vapiConfig.context === 'string' 
+      ? vapiConfig.context 
+      : JSON.stringify(vapiConfig.context || {});
+      
     stream.parameter({
       name: 'context',
-      value: escapeXml(typeof vapiConfig.context === 'string' ? 
-        vapiConfig.context : JSON.stringify(vapiConfig.context || {}))
+      value: escapeXml(contextValue)
     });
     
-    console.log('Generated VAPI bridge TwiML:', response.toString());
+    // Add call_id parameter if we have one
+    if (data.call_id) {
+      stream.parameter({
+        name: 'call_id',
+        value: data.call_id
+      });
+    }
+    
+    const finalTwiML = response.toString();
+    console.log('Generated VAPI bridge TwiML:', finalTwiML);
     
     // Return the TwiML
     return {
-      twiml: response.toString()
+      twiml: finalTwiML
     };
   } catch (error) {
     console.error('Error creating VAPI bridge:', error);
@@ -484,7 +549,15 @@ const createVapiBridge = async (trackingId) => {
 const handleCallStatus = async (statusData) => {
   try {
     const { CallSid, CallStatus, RecordingUrl, CallDuration } = statusData;
-    console.log(`Received call status update for call ${CallSid}: ${CallStatus}`);
+    
+    // Better logging of complete webhook data
+    console.log(`Received call status webhook for call ${CallSid}:`, JSON.stringify(statusData, null, 2));
+    
+    // If CallSid is missing, we can't do anything
+    if (!CallSid) {
+      console.warn('Received call status webhook without CallSid, ignoring');
+      return;
+    }
     
     // Update in-memory status
     const callInfo = callStatusMap.get(CallSid);
@@ -493,17 +566,65 @@ const handleCallStatus = async (statusData) => {
       if (CallStatus === 'completed' || CallStatus === 'failed' || CallStatus === 'busy' || CallStatus === 'no-answer') {
         callInfo.completed = true;
       }
+      
+      // If we have the tracking_id in memory but not in the database, try to update it now
+      if (callInfo.tracking_id) {
+        console.log(`Updating call_tracking with saved tracking_id ${callInfo.tracking_id} for call ${CallSid}`);
+        try {
+          const { data, error } = await supabase
+            .from('call_tracking')
+            .update({ tracking_id: callInfo.tracking_id })
+            .eq('call_id', CallSid)
+            .select('id')
+            .maybeSingle();
+          
+          if (!error && data) {
+            console.log(`Successfully updated tracking_id for call ${CallSid}`);
+          }
+        } catch (err) {
+          console.warn(`Failed to update tracking_id for call ${CallSid}:`, err.message);
+        }
+      }
+    } else {
+      console.warn(`No in-memory call info found for CallSid: ${CallSid}`);
     }
     
-    // Update database
+    // Try to find the tracking record in the database
     const { data: trackingData, error: findError } = await supabase
       .from('call_tracking')
       .select('id, tracking_id, lead_sequence_id, step_id')
       .eq('call_id', CallSid)
-      .single();
+      .maybeSingle(); // Use maybeSingle instead of single to avoid errors
     
-    if (findError) {
-      console.error('Error finding call tracking record:', findError);
+    if (findError || !trackingData) {
+      console.warn(`No call tracking record found for CallSid: ${CallSid}. This is expected for initial calls.`);
+      
+      // If we don't have a tracking record yet, let's try to create one with basic info
+      if (CallStatus && CallStatus !== 'unknown') {
+        try {
+          const { data, error } = await supabase
+            .from('call_tracking')
+            .insert({
+              call_id: CallSid,
+              status: CallStatus,
+              tracking_id: `autogen-${CallSid.substring(0, 8)}`, // Generate a tracking ID based on CallSid
+              duration: CallDuration ? parseInt(CallDuration) : null,
+              recording_url: RecordingUrl || null,
+              created_at: new Date().toISOString()
+            })
+            .select('id')
+            .single();
+          
+          if (!error) {
+            console.log(`Created new call tracking record for CallSid: ${CallSid}`);
+          } else {
+            console.error('Error creating call tracking record:', error);
+          }
+        } catch (err) {
+          console.error('Failed to create tracking record:', err.message);
+        }
+      }
+      
       return;
     }
     
@@ -517,6 +638,8 @@ const handleCallStatus = async (statusData) => {
       updateData.completed_at = new Date().toISOString();
     } else if (CallStatus === 'failed' || CallStatus === 'busy' || CallStatus === 'no-answer') {
       updateData.failed_at = new Date().toISOString();
+    } else if (CallStatus === 'in-progress' && !trackingData.started_at) {
+      updateData.started_at = new Date().toISOString();
     }
     
     const { error: updateError } = await supabase
@@ -526,6 +649,8 @@ const handleCallStatus = async (statusData) => {
     
     if (updateError) {
       console.error('Error updating call tracking status:', updateError);
+    } else {
+      console.log(`Successfully updated status to ${CallStatus} for call ${CallSid}`);
     }
   } catch (error) {
     console.error('Error handling call status:', error);
@@ -582,40 +707,147 @@ const handleRecording = async (recordingData) => {
  */
 const handleVapiWebhook = async (webhookData) => {
   try {
-    console.log('Received VAPI webhook:', webhookData);
+    console.log('Received VAPI webhook:', JSON.stringify(webhookData, null, 2));
     
-    const { call_id, transcript, conversation } = webhookData;
+    const { id: call_id, status, customer, artifact } = webhookData;
     
-    // If there's no call_id, we can't process this webhook
     if (!call_id) {
       console.error('No call_id in VAPI webhook data');
       return;
     }
     
-    // Find the tracking record by call_id
-    const { data: trackingData, error: findError } = await supabase
-      .from('call_tracking')
-      .select('id')
-      .eq('call_id', call_id)
-      .single();
-    
-    if (findError) {
-      console.error('Error finding call tracking record for VAPI webhook:', findError);
-      return;
+    // Update in-memory status
+    const callInfo = callStatusMap.get(call_id);
+    if (callInfo) {
+      callInfo.status = status;
+      if (status === 'ended') {
+        callInfo.completed = true;
+      }
     }
     
-    // Store the conversation data
-    const { error: insertError } = await supabase
-      .from('call_conversations')
-      .insert({
-        call_tracking_id: trackingData.id,
-        transcript: transcript,
-        conversation_data: conversation,
-        created_at: new Date().toISOString()
-      });
+    // Try to find the tracking record - first check if customer metadata has tracking_id
+    let tracking_id = null;
+    if (customer && customer.metadata && customer.metadata.tracking_id) {
+      tracking_id = customer.metadata.tracking_id;
+    } else if (callInfo) {
+      tracking_id = callInfo.tracking_id;
+    }
     
-    if (insertError) {
-      console.error('Error storing VAPI conversation:', insertError);
+    // Find the tracking record
+    const { data: trackingData, error: findError } = await supabase
+      .from('call_tracking')
+      .select('id, started_at')
+      .eq('call_id', call_id)
+      .maybeSingle();
+    
+    if (findError || !trackingData) {
+      console.warn(`No call tracking record found for call_id: ${call_id}. Attempting to create one.`);
+      
+      // Try to create a new tracking record
+      if (status) {
+        try {
+          // If we have the tracking_id from metadata, use it to find the tracking record
+          let existingRecord = null;
+          if (tracking_id) {
+            const { data } = await supabase
+              .from('call_tracking')
+              .select('id')
+              .eq('tracking_id', tracking_id)
+              .maybeSingle();
+            
+            if (data) {
+              existingRecord = data;
+              // Update with the call_id
+              await supabase
+                .from('call_tracking')
+                .update({ 
+                  call_id: call_id,
+                  status: status
+                })
+                .eq('id', existingRecord.id);
+              
+              console.log(`Updated existing tracking record with call_id: ${call_id}`);
+            }
+          }
+          
+          // If no existing record, create a new one
+          if (!existingRecord) {
+            const { data, error } = await supabase
+              .from('call_tracking')
+              .insert({
+                call_id: call_id,
+                status: status,
+                tracking_id: tracking_id || `vapi-${call_id.substring(0, 8)}`,
+                phone_number: customer ? customer.number : null,
+                created_at: new Date().toISOString()
+              })
+              .select('id')
+              .single();
+            
+            if (!error) {
+              console.log(`Created new call tracking record for call_id: ${call_id}`);
+              trackingData = data;
+            } else {
+              console.error('Error creating call tracking record:', error);
+            }
+          } else {
+            trackingData = existingRecord;
+          }
+        } catch (err) {
+          console.error('Failed to create tracking record:', err.message);
+        }
+      }
+      
+      if (!trackingData) return;
+    }
+    
+    // Update call status
+    const updateData = {
+      status: status
+    };
+    
+    // Update additional fields based on call status
+    if (status === 'ended') {
+      updateData.completed_at = new Date().toISOString();
+      
+      // Add recording details if available
+      if (artifact) {
+        if (artifact.recordingUrl) {
+          updateData.recording_url = artifact.recordingUrl;
+        }
+        
+        // Store conversation details
+        if (artifact.transcript || artifact.messages) {
+          try {
+            await supabase
+              .from('call_conversations')
+              .insert({
+                call_tracking_id: trackingData.id,
+                transcript: artifact.transcript,
+                conversation_data: artifact.messages,
+                created_at: new Date().toISOString()
+              });
+            
+            console.log('Stored call conversation transcript and messages');
+          } catch (convError) {
+            console.error('Error storing call conversation:', convError);
+          }
+        }
+      }
+    } else if (status === 'in-progress' && !trackingData.started_at) {
+      updateData.started_at = new Date().toISOString();
+    }
+    
+    // Update the tracking record
+    const { error: updateError } = await supabase
+      .from('call_tracking')
+      .update(updateData)
+      .eq('id', trackingData.id);
+    
+    if (updateError) {
+      console.error('Error updating call tracking status:', updateError);
+    } else {
+      console.log(`Successfully updated status to ${status} for call ${call_id}`);
     }
   } catch (error) {
     console.error('Error handling VAPI webhook:', error);

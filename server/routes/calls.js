@@ -63,49 +63,58 @@ router.post('/', async (req, res) => {
 });
 
 /**
- * Legacy route for backwards compatibility
+ * @route POST /api/v1/calls/place
+ * @desc Place a new outbound call to a lead
  */
 router.post('/place', async (req, res) => {
   try {
-    const { phone_number, lead_id, script, lead_sequence_id, step_id } = req.body;
+    const { phone_number, lead_id, lead_sequence_id, step_id, call_script } = req.body;
     
-    // Get lead data if lead_id is provided
-    let lead = req.body.lead;
-    if (!lead && lead_id) {
-      const { data, error } = await supabase
-        .from('leads')
-        .select('id, first_name, last_name, email, title, company_name, location, linkedin, phone')
-        .eq('id', lead_id)
-        .single();
-        
-      if (error) {
-        throw new Error(`Error fetching lead: ${error.message}`);
-      }
-      lead = data;
+    if (!phone_number || !lead_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number and lead ID are required'
+      });
     }
     
-    if (!lead) {
-      throw new Error('Lead data is required');
+    // Fetch lead data from Supabase
+    const { data: lead, error: leadError } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', lead_id)
+      .single();
+    
+    if (leadError) {
+      console.error('Error fetching lead data:', leadError);
+      return res.status(404).json({
+        success: false,
+        message: 'Lead not found'
+      });
     }
     
-    // Use lead's phone if not provided
-    const targetPhone = phone_number || lead.phone;
-    if (!targetPhone) {
-      throw new Error('No phone number provided and lead has no phone number');
-    }
+    console.log(`Call request received for ${phone_number}`, {
+      lead_id,
+      lead_sequence_id,
+      step_id
+    });
     
-    const callResult = await placeCall(targetPhone, lead, script, lead_sequence_id, step_id);
-    res.json({
+    const callResult = await placeCall(
+      phone_number,
+      lead,
+      call_script,
+      lead_sequence_id,
+      step_id
+    );
+    
+    return res.status(201).json({
       success: true,
-      message: 'Call initiated successfully',
-      call: callResult
+      data: callResult
     });
   } catch (error) {
-    console.error('Error placing call:', error);
-    res.status(500).json({
+    console.error('Error in /calls/place:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Failed to place call',
-      error: error.message
+      message: error.message
     });
   }
 });
@@ -230,39 +239,56 @@ router.post('/recording', async (req, res) => {
 });
 
 /**
- * Handle VAPI webhook (conversation updates)
+ * @route POST /api/v1/calls/vapi-webhook
+ * @desc Webhook endpoint for receiving VAPI call events
  */
-router.post('/webhook', async (req, res) => {
+router.post('/vapi-webhook', async (req, res) => {
   try {
     console.log('VAPI webhook received:', req.body);
-    await handleVapiWebhook(req.body);
-    res.status(200).send('OK');
+    
+    // Process the webhook asynchronously
+    handleVapiWebhook(req.body).catch(error => {
+      console.error('Error processing VAPI webhook:', error);
+    });
+    
+    // Return immediately with 200 OK to acknowledge receipt
+    return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('VAPI webhook error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error in VAPI webhook handler:', error);
+    // Still return 200 to prevent VAPI from retrying
+    return res.status(200).json({ 
+      success: false, 
+      message: 'Webhook received but error during processing' 
+    });
   }
 });
 
 /**
- * Get call status
+ * @route GET /api/v1/calls/status/:callId
+ * @desc Get the status of a call by ID
  */
 router.get('/status/:callId', async (req, res) => {
   try {
     const { callId } = req.params;
-    if (!callId) {
-      return res.status(400).json({ error: 'Call ID is required' });
+    const callStatus = await getCallStatus(callId);
+    
+    if (!callStatus) {
+      return res.status(404).json({
+        success: false,
+        message: 'Call not found'
+      });
     }
     
-    const status = await getCallStatus(callId);
-    
-    if (!status) {
-      return res.status(404).json({ error: 'Call not found' });
-    }
-    
-    res.json({ success: true, status });
+    return res.json({
+      success: true,
+      data: callStatus
+    });
   } catch (error) {
-    console.error('Error fetching call status:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error in /calls/status/:callId:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
   }
 });
 
