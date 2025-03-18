@@ -19,6 +19,16 @@ const TWILIO_PHONE_NUMBER = process.env.VITE_TWILIO_PHONE_NUMBER;
 // Track call statuses in memory for quick access
 const callStatusMap = new Map();
 
+// Add this function to get a proper webhook URL that works with Twilio
+const getPublicWebhookUrl = (path) => {
+  const configuredUrl = process.env.VITE_APP_URL;
+  // If the URL is localhost or not set, use the production URL
+  if (!configuredUrl || configuredUrl.includes('localhost')) {
+    return `https://fastcrm.netlify.app${path}`;
+  }
+  return `${configuredUrl}${path}`;
+};
+
 /**
  * Place an outbound call using Twilio but VAPI for voice AI
  * @param {string} phone_number - The phone number to call
@@ -115,14 +125,15 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     // HYBRID APPROACH: Use VAPI for voice AI but initiate via webhook
     if (VAPI_API_KEY) {
       // Create a webhook URL that will trigger VAPI when Twilio connects the call
-      let webhookUrl = `${process.env.VITE_APP_URL}/api/v1/calls/vapi-bridge/${tracking.tracking_id}`;
+      const localWebhookUrl = `${process.env.VITE_APP_URL}/api/v1/calls/vapi-bridge/${tracking.tracking_id}`;
+      // Get a public URL that Twilio can access
+      const webhookUrl = getPublicWebhookUrl(`/api/v1/calls/vapi-bridge/${tracking.tracking_id}`);
       
       // For development with localhost, provide clear guidance
-      if (webhookUrl.includes('localhost')) {
-        console.warn('⚠️ IMPORTANT: Twilio cannot reach localhost URLs. You need to use a public URL for webhooks.');
-        console.warn('Try using ngrok (https://ngrok.com) to create a public URL that forwards to your local server.');
-        console.warn('Example: ngrok http 8001');
-        console.warn('Then set VITE_APP_URL=https://your-ngrok-url in your .env file');
+      if (process.env.VITE_APP_URL && process.env.VITE_APP_URL.includes('localhost')) {
+        console.warn('⚠️ Local URL detected but using production URL for Twilio webhooks');
+        console.warn(`Local URL: ${localWebhookUrl}`);
+        console.warn(`Production URL for Twilio: ${webhookUrl}`);
       }
       
       console.log(`Webhook URL for VAPI bridge: ${webhookUrl}`);
@@ -175,7 +186,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
             to: phone_number,
             from: TWILIO_PHONE_NUMBER,
             url: webhookUrl,
-            statusCallback: `${process.env.VITE_APP_URL}/api/v1/calls/status`,
+            statusCallback: getPublicWebhookUrl('/api/v1/calls/status'),
             statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
             statusCallbackMethod: 'POST',
             record: true
@@ -211,14 +222,15 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       console.log('No VAPI API key found. Using basic TwiML instead.');
       
       // Generate basic TwiML for the call
-      let twimlBinUrl = `${process.env.VITE_APP_URL}/api/v1/calls/twiml/${tracking.tracking_id}`;
+      const localTwimlUrl = `${process.env.VITE_APP_URL}/api/v1/calls/twiml/${tracking.tracking_id}`;
+      // Get a public URL that Twilio can access
+      const twimlBinUrl = getPublicWebhookUrl(`/api/v1/calls/twiml/${tracking.tracking_id}`);
       
       // For development with localhost, provide clear guidance
-      if (twimlBinUrl.includes('localhost')) {
-        console.warn('⚠️ IMPORTANT: Twilio cannot reach localhost URLs. You need to use a public URL for webhooks.');
-        console.warn('Try using ngrok (https://ngrok.com) to create a public URL that forwards to your local server.');
-        console.warn('Example: ngrok http 8001');
-        console.warn('Then set VITE_APP_URL=https://your-ngrok-url in your .env file');
+      if (process.env.VITE_APP_URL && process.env.VITE_APP_URL.includes('localhost')) {
+        console.warn('⚠️ Local URL detected but using production URL for Twilio webhooks');
+        console.warn(`Local URL: ${localTwimlUrl}`);
+        console.warn(`Production URL for Twilio: ${twimlBinUrl}`);
       }
       
       console.log(`TwiML URL: ${twimlBinUrl}`);
@@ -234,7 +246,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
             to: phone_number,
             from: TWILIO_PHONE_NUMBER,
             url: twimlBinUrl,
-            statusCallback: `${process.env.VITE_APP_URL}/api/v1/calls/status`,
+            statusCallback: getPublicWebhookUrl('/api/v1/calls/status'),
             statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
             statusCallbackMethod: 'POST',
             record: true
