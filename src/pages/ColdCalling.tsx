@@ -14,6 +14,7 @@ export default function ColdCalling() {
   const [callResult, setCallResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [manualNgrokUrl, setManualNgrokUrl] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
 
   const isProduction = window.location.hostname === 'fastcrm.netlify.app';
   const hasNgrokConfigured = isProduction && localStorage.getItem('ngrok_url');
@@ -161,10 +162,155 @@ export default function ColdCalling() {
         </div>
       )}
       
+      {error && (
+        <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-4" role="alert">
+          <p className="font-bold">Error</p>
+          <p>{error}</p>
+        </div>
+      )}
+      
       <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Leads List */}
         <div className="col-span-1 bg-white rounded-lg shadow p-4 max-h-[calc(100vh-180px)] overflow-y-auto">
           <h2 className="text-xl font-semibold mb-4">Leads</h2>
-          {/* ... rest of the component */}
+          
+          {loading && leads.length === 0 ? (
+            <p className="text-gray-500">Loading leads...</p>
+          ) : leads.length === 0 ? (
+            <p className="text-gray-500">No leads found. Please add some leads first.</p>
+          ) : (
+            <ul className="divide-y divide-gray-200">
+              {leads.map((lead) => (
+                <li 
+                  key={lead.id} 
+                  className={`py-2 px-2 cursor-pointer hover:bg-gray-50 ${selectedLead === lead.id ? 'bg-blue-50' : ''}`}
+                  onClick={() => {
+                    setSelectedLead(lead.id);
+                    setPhoneNumber(lead.phone || '');
+                  }}
+                >
+                  <div className="font-medium">{lead.first_name} {lead.last_name}</div>
+                  <div className="text-sm text-gray-500">{lead.company_name}</div>
+                  <div className="text-sm text-gray-500">{lead.phone}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        
+        {/* Tabs and Content */}
+        <div className="col-span-2 bg-white rounded-lg shadow">
+          {/* Tab Navigation */}
+          <div className="flex border-b">
+            <button
+              className={`px-4 py-2 flex items-center ${activeTab === 'calls' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
+              onClick={() => setActiveTab('calls')}
+            >
+              <Phone size={18} className="mr-2" />
+              Make Call
+            </button>
+            <button
+              className={`px-4 py-2 flex items-center ${activeTab === 'script' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
+              onClick={() => setActiveTab('script')}
+            >
+              <Settings size={18} className="mr-2" />
+              Call Script
+            </button>
+            <button
+              className={`px-4 py-2 flex items-center ${activeTab === 'history' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
+              onClick={() => setActiveTab('history')}
+            >
+              <History size={18} className="mr-2" />
+              Call History
+            </button>
+          </div>
+          
+          {/* Tab Content */}
+          <div className="p-4">
+            {activeTab === 'calls' && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Place a Call</h3>
+                
+                {selectedLead ? (
+                  <div>
+                    <p className="mb-2">
+                      Selected Lead: <span className="font-medium">{getLeadName(selectedLead)}</span>
+                    </p>
+                    
+                    <div className="mb-4">
+                      <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+                        Phone Number
+                      </label>
+                      <input
+                        type="tel"
+                        id="phone"
+                        className="w-full p-2 border rounded"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        placeholder="+1234567890"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Enter phone number in international format (e.g., +1234567890)
+                      </p>
+                    </div>
+                    
+                    <button
+                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
+                      onClick={() => handleTestCall(phoneNumber)}
+                      disabled={loading || !phoneNumber}
+                    >
+                      {loading ? (
+                        <>
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Placing Call...
+                        </>
+                      ) : (
+                        <>
+                          <PhoneCall size={18} className="mr-2" />
+                          Place Call
+                        </>
+                      )}
+                    </button>
+                    
+                    {callResult && (
+                      <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
+                        <h4 className="font-medium text-green-800">Call Initiated!</h4>
+                        <p className="text-sm text-green-700">
+                          Call ID: {callResult.call_id || callResult.id}
+                        </p>
+                        <p className="text-sm text-green-700">
+                          Status: {callResult.status || 'Initiated'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-gray-500">Please select a lead from the list to make a call.</p>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'script' && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Call Script</h3>
+                <CallScriptEditor value={callScript} onChange={setCallScript} />
+              </div>
+            )}
+            
+            {activeTab === 'history' && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Call History</h3>
+                {selectedLead ? (
+                  <CallHistory leadId={selectedLead} />
+                ) : (
+                  <p className="text-gray-500">Please select a lead to view call history.</p>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
