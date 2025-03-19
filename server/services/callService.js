@@ -10,6 +10,10 @@ const VAPI_API_KEY = process.env.VITE_VAPI_API_KEY;
 const VAPI_BASE_URL = 'https://api.vapi.ai/call';
 const PHONE_SERVICE_API_KEY = process.env.VITE_PHONE_SERVICE_API_KEY;
 
+// VAPI configuration for outbound calls
+const VAPI_ASSISTANT_ID = '75e78c62-2ff1-4d35-8542-bd90999af156';
+const VAPI_PHONE_NUMBER_ID = 'e314a4b1-8538-4654-a425-17ce97a39afb';
+
 // Initialize Twilio client with your credentials
 const twilioClient = twilio(
   process.env.VITE_TWILIO_ACCOUNT_SID,
@@ -131,28 +135,47 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       try {
         console.log('Making REAL call to', phone_number);
         
-        // Make the call using VAPI SDK
-        callData = await vapiClient.calls.create({
-          // Call details
-          name: `Call to ${leadName || phone_number}`,
+        // Construct the payload according to VAPI API documentation
+        const callPayload = {
+          // Name of the call for reference
+          name: `Cold Call to ${leadName || phone_number}`,
           
-          // Create a transient assistant
-          assistant: {
-            name: `Cold Call Assistant for ${leadName || 'Lead'}`,
+          // Metadata for tracking purposes - stored at call level
+          metadata: {
+            lead_id: lead.id,
+            tracking_id: tracking.tracking_id,
+            lead_sequence_id: leadSequenceId || null,
+            step_id: stepId || null
+          },
+          
+          // Use existing phone number ID
+          phoneNumberId: VAPI_PHONE_NUMBER_ID,
+          
+          // Use existing assistant ID
+          assistantId: VAPI_ASSISTANT_ID,
+          
+          // Customer to call
+          customer: {
+            number: phone_number.startsWith('+') ? phone_number : `+${phone_number}`,
+            name: leadName || 'Lead'
+          },
+          
+          // Only override the essential parts, not the voice settings which are already set on the assistant
+          assistantOverrides: {
+            // First message and mode
             firstMessage: greeting,
-            firstMessageMode: "assistant-speaks-first",
             
-            // Voice configuration
-            voice: {
-              provider: "eleven-labs",  // Or another provider like "azure"
-              voiceId: callScript.voice || "shimmer" 
+            // Server webhook configuration
+            serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
+            server: {
+              url: webhookUrl,
+              timeoutSeconds: 30
             },
             
-            // Model configuration
+            // Model configuration with system message
             model: {
               provider: "openai",
               model: callScript.ai_model || "gpt-4",
-              // Add instructions based on the call script
               messages: [
                 {
                   role: "system",
@@ -175,35 +198,14 @@ Remember to:
 First, introduce yourself and the purpose of your call. Then, proceed with the conversation.`
                 }
               ]
-            },
-            
-            // Maximum duration in seconds
-            maxDurationSeconds: 600,
-            
-            // Timeout if nobody speaks for 30 seconds
-            silenceTimeoutSeconds: 30,
-            
-            // Optional server webhook for real-time events
-            serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
-            server: {
-              url: webhookUrl,
-              timeoutSeconds: 30
-            }
-          },
-          
-          // Customer to call
-          customer: {
-            number: phone_number.startsWith('+') ? phone_number : `+${phone_number}`,
-            name: leadName || 'Lead',
-            // Pass additional context as metadata
-            metadata: {
-              lead_id: lead.id,
-              tracking_id: tracking.tracking_id,
-              lead_sequence_id: leadSequenceId || null,
-              step_id: stepId || null
             }
           }
-        });
+        };
+        
+        console.log('VAPI call payload:', JSON.stringify(callPayload, null, 2));
+        
+        // Make the call using VAPI SDK
+        callData = await vapiClient.calls.create(callPayload);
         
         console.log('VAPI call successfully initiated:', callData);
       } catch (vapiError) {
@@ -709,7 +711,28 @@ const handleVapiWebhook = async (webhookData) => {
   try {
     console.log('Received VAPI webhook:', JSON.stringify(webhookData, null, 2));
     
-    const { id: call_id, status, customer, artifact } = webhookData;
+    // The webhook data structure has changed - check for message wrapper
+    let call_id, status, customer, artifact, metadata;
+    
+    if (webhookData.message) {
+      // Extract from message structure
+      ({ status } = webhookData.message);
+      
+      if (webhookData.message.call) {
+        call_id = webhookData.message.call.id;
+        customer = webhookData.message.call.customer;
+        metadata = webhookData.message.call.metadata;
+      }
+      
+      if (webhookData.message.artifact) {
+        artifact = webhookData.message.artifact;
+      }
+      
+      console.log(`Extracted call ID from message structure: ${call_id}`);
+    } else {
+      // Use original structure as fallback
+      ({ id: call_id, status, customer, artifact, metadata } = webhookData);
+    }
     
     if (!call_id) {
       console.error('No call_id in VAPI webhook data');
@@ -725,12 +748,23 @@ const handleVapiWebhook = async (webhookData) => {
       }
     }
     
-    // Try to find the tracking record - first check if customer metadata has tracking_id
+    // Try to find the tracking record - check metadata first, then check memory
     let tracking_id = null;
-    if (customer && customer.metadata && customer.metadata.tracking_id) {
+    
+    // Check the top-level metadata first
+    if (metadata && metadata.tracking_id) {
+      tracking_id = metadata.tracking_id;
+      console.log(`Found tracking_id in metadata: ${tracking_id}`);
+    }
+    // Legacy check for customer metadata (for backward compatibility)
+    else if (customer && customer.metadata && customer.metadata.tracking_id) {
       tracking_id = customer.metadata.tracking_id;
-    } else if (callInfo) {
+      console.log(`Found tracking_id in customer metadata: ${tracking_id}`);
+    } 
+    // Finally check in-memory call info
+    else if (callInfo) {
       tracking_id = callInfo.tracking_id;
+      console.log(`Found tracking_id in memory: ${tracking_id}`);
     }
     
     // Find the tracking record
@@ -809,6 +843,12 @@ const handleVapiWebhook = async (webhookData) => {
     // Update additional fields based on call status
     if (status === 'ended') {
       updateData.completed_at = new Date().toISOString();
+      
+      // Log ended reason if available
+      if (webhookData.message && webhookData.message.endedReason) {
+        updateData.error_message = webhookData.message.endedReason;
+        console.log(`Call ended with reason: ${webhookData.message.endedReason}`);
+      }
       
       // Add recording details if available
       if (artifact) {
