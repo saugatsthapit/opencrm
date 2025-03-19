@@ -27,6 +27,32 @@ const vapiClient = new VapiClient({ apiKey: VAPI_API_KEY });
 // Track call statuses in memory for quick access
 const callStatusMap = new Map();
 
+// Helper function to format phone numbers to E.164 standard
+const formatPhoneNumber = (phoneNumber) => {
+  if (!phoneNumber) return '';
+  
+  // Remove all non-digit characters
+  const digitsOnly = phoneNumber.replace(/\D/g, '');
+  
+  // If the number already has a +, just return it with only digits
+  if (phoneNumber.startsWith('+')) {
+    return '+' + digitsOnly;
+  }
+  
+  // If it starts with a 1 (US), add + prefix
+  if (digitsOnly.startsWith('1') && digitsOnly.length === 11) {
+    return '+' + digitsOnly;
+  }
+  
+  // If it's a 10-digit number (assuming US), add +1 prefix
+  if (digitsOnly.length === 10) {
+    return '+1' + digitsOnly;
+  }
+  
+  // For any other format, just add + prefix
+  return '+' + digitsOnly;
+};
+
 // Add this function to get a proper webhook URL that works with external services
 const getPublicWebhookUrl = () => {
   const baseUrl = process.env.SERVER_URL || 'http://localhost:8001';
@@ -50,6 +76,10 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       throw new Error('Phone number is required for call step');
     }
 
+    // Ensure phone number is in E.164 format
+    const formattedPhoneNumber = formatPhoneNumber(phone_number);
+    console.log(`Formatted phone number: ${formattedPhoneNumber}`);
+    
     if (!VAPI_API_KEY) {
       throw new Error('VAPI API key is required for cold calling. Please set VITE_VAPI_API_KEY in your .env file.');
     }
@@ -62,7 +92,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
         .insert({
           lead_sequence_id: leadSequenceId,
           step_id: stepId,
-          phone_number,
+          phone_number: formattedPhoneNumber,
           lead_id: lead.id
         })
         .select()
@@ -77,7 +107,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
           const { data: rpcData, error: rpcError } = await supabase.rpc('create_call_tracking', {
             p_lead_id: lead.id,
             p_lead_sequence_id: leadSequenceId || null,
-            p_phone_number: phone_number,
+            p_phone_number: formattedPhoneNumber,
             p_step_id: stepId || null
           });
           
@@ -102,7 +132,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       tracking = {
         tracking_id: `local-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
         id: null,
-        phone_number,
+        phone_number: formattedPhoneNumber,
         lead_id: lead.id
       };
       console.log('Using local tracking as fallback:', tracking);
@@ -149,12 +179,12 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     
     if (enableRealCalls) {
       try {
-        console.log('Making REAL call to', phone_number);
+        console.log('Making REAL call to', formattedPhoneNumber);
         
         // Construct the payload according to VAPI API documentation
         const callPayload = {
           // Name of the call for reference
-          name: `Cold Call to ${lead.first_name || lead.last_name || phone_number}`,
+          name: `Cold Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
           
           // Metadata for tracking purposes - stored at call level
           metadata: {
@@ -172,7 +202,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
           
           // Customer to call
           customer: {
-            number: phone_number.startsWith('+') ? phone_number : `+${phone_number}`,
+            number: formattedPhoneNumber,
             name: lead.first_name || lead.last_name || 'Lead'
           },
           

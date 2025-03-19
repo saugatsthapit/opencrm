@@ -96,6 +96,30 @@ export default function ColdCalling() {
     }
   };
 
+  // Format a phone number to E.164 format (+country code and only digits)
+  const formatPhoneNumber = (phone: string): string => {
+    // Remove all non-digit characters
+    const digitsOnly = phone.replace(/\D/g, '');
+    
+    // If the number already starts with a +, just return it with non-digits removed
+    if (phone.startsWith('+')) {
+      return '+' + digitsOnly;
+    }
+    
+    // If it starts with a 1 (US), add + prefix
+    if (digitsOnly.startsWith('1') && digitsOnly.length === 11) {
+      return '+' + digitsOnly;
+    }
+    
+    // If it's a 10-digit number (assuming US), add +1 prefix
+    if (digitsOnly.length === 10) {
+      return '+1' + digitsOnly;
+    }
+    
+    // For any other format, just add + prefix
+    return '+' + digitsOnly;
+  };
+
   const handleTestCall = async (phoneNumber: string) => {
     if (!selectedLead) {
       setError('Please select a lead first');
@@ -107,8 +131,11 @@ export default function ColdCalling() {
       setError(null);
       setCallResult(null);
 
+      // Format the phone number before making the call
+      const formattedNumber = formatPhoneNumber(phoneNumber);
+
       const response = await placeCall(
-        phoneNumber,
+        formattedNumber,
         selectedLead,
         callScript
       );
@@ -288,9 +315,10 @@ export default function ColdCalling() {
         throw new Error('Next lead not found');
       }
       
-      // Make the call (we already verified phone exists)
+      // Make the call (we already verified phone exists) and format the number
+      const formattedNumber = formatPhoneNumber(lead.mobile_phone1!);
       const response = await placeCall(
-        lead.mobile_phone1!,
+        formattedNumber,
         lead.id,
         callScript
       );
@@ -587,9 +615,14 @@ export default function ColdCalling() {
                                 onChange={(e) => setPhoneNumber(e.target.value)}
                                 placeholder="+1234567890"
                               />
-                              <p className="text-xs text-gray-500 mt-1">
-                                Enter phone number in international format (e.g., +1234567890)
-                              </p>
+                              <div className="flex justify-between items-center">
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Enter phone number in international format (e.g., +1234567890)
+                                </p>
+                                <div className="bg-blue-50 text-xs text-blue-700 p-1 px-2 rounded mt-1">
+                                  Phone will be formatted as: {phoneNumber ? formatPhoneNumber(phoneNumber) : '+1XXXXXXXXXX'}
+                                </div>
+                              </div>
                               {!phoneNumber && (
                                 <p className="text-sm text-red-500 mt-1">
                                   This lead does not have a phone number. Please enter one manually to make a call.
