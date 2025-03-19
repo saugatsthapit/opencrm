@@ -9,9 +9,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Terminal, Info, Phone, CheckCircle, XCircle, AlertCircle, UserPlus } from 'lucide-react';
+import { Terminal, Info, Phone, CheckCircle, XCircle, AlertCircle, UserPlus, List, PhoneOutgoing } from 'lucide-react';
 import { toast } from "react-hot-toast";
 import { useRouter } from 'next/navigation';
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 // Define interfaces for our component
 interface Lead {
@@ -23,6 +26,8 @@ interface Lead {
   phone?: string;
   title?: string;
   created_at: string;
+  selected?: boolean; // For multiple selection
+  called?: boolean;   // To track if lead was called
 }
 
 interface CallScript {
@@ -49,13 +54,16 @@ export default function ColdCallingPage() {
   
   // State for leads, call scripts, and form inputs
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [callScripts, setCallScripts] = useState<CallScript[]>([]);
+  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [selectedLead, setSelectedLead] = useState<string>('');
+  const [callScripts, setCallScripts] = useState<CallScript[]>([]);
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [customPhoneNumber, setCustomPhoneNumber] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [callResult, setCallResult] = useState<CallResult | null>(null);
   const [callError, setCallError] = useState<string | null>(null);
+  const [callingInProgress, setCallingInProgress] = useState<boolean>(false);
+  const [currentCallIndex, setCurrentCallIndex] = useState<number>(-1);
   
   // New script form state
   const [newScript, setNewScript] = useState<CallScript>({
@@ -73,7 +81,7 @@ export default function ColdCallingPage() {
       'Would you be interested in learning more about our solution?'
     ],
     closing: 'Thank you for your time today. I\'d be happy to schedule a follow-up call to discuss this further.',
-    voice: 'shimmer',
+    voice: 'rachel',
     ai_model: 'gpt-4'
   });
   
@@ -93,7 +101,14 @@ export default function ColdCallingPage() {
       
       if (error) throw error;
       
-      setLeads(data || []);
+      // Add selected field to each lead
+      const updatedLeads = (data || []).map(lead => ({
+        ...lead,
+        selected: false,
+        called: false
+      }));
+      
+      setLeads(updatedLeads);
       if (data && data.length > 0) {
         setSelectedLead(data[0].id);
       }
@@ -161,15 +176,29 @@ export default function ColdCallingPage() {
     }
   };
   
+  // Toggle lead selection for batch calling
+  const toggleLeadSelection = (leadId: string) => {
+    setSelectedLeads(prev => {
+      if (prev.includes(leadId)) {
+        return prev.filter(id => id !== leadId);
+      } else {
+        return [...prev, leadId];
+      }
+    });
+  };
+  
   // Initiate a call to the selected lead
-  const initiateCall = async () => {
+  const initiateCall = async (leadId?: string) => {
     try {
       setIsLoading(true);
       setCallError(null);
       setCallResult(null);
       
+      // Use provided leadId or fall back to selected lead
+      const targetLeadId = leadId || selectedLead;
+      
       // Find the selected lead and script
-      const lead = leads.find(l => l.id === selectedLead);
+      const lead = leads.find(l => l.id === targetLeadId);
       const script = callScripts.find(s => s.id === selectedScript);
       
       if (!lead) {
@@ -205,12 +234,182 @@ export default function ColdCallingPage() {
         throw new Error(data.message || 'Failed to initiate call');
       }
       
-      toast.success('Call initiated successfully!');
+      toast.success(`Call to ${lead.first_name} ${lead.last_name} initiated successfully!`);
       setCallResult(data.data);
+      
+      // Mark this lead as called
+      setLeads(prevLeads => 
+        prevLeads.map(l => 
+          l.id === lead.id ? { ...l, called: true } : l
+        )
+      );
+      
+      return data.data;
     } catch (error: any) {
       console.error('Error initiating call:', error);
       setCallError(error.message || 'Failed to initiate call');
       toast.error(error.message || 'Failed to initiate call');
+      return null;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Start batch calling sequence
+  const startBatchCalling = async () => {
+    if (selectedLeads.length === 0) {
+      toast.error('Please select at least one lead to call');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      setCallError(null);
+      
+      // Find the selected script
+      const script = callScripts.find(s => s.id === selectedScript);
+      
+      if (!script) {
+        throw new Error('Please select a call script');
+      }
+      
+      // Call the batch API endpoint
+      const response = await fetch('/api/v1/calls/place-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lead_ids: selectedLeads,
+          call_script: script
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to initiate batch calls');
+      }
+      
+      // Set the batch calling in progress state
+      setCallingInProgress(true);
+      
+      // If the first call was successfully placed, set the current call index to 0
+      if (data.data.first_call_placed) {
+        setCurrentCallIndex(0);
+        
+        // Find the lead that was called and mark it as called
+        const firstCalledLead = data.data.leads.find(lead => !lead.queued && lead.success);
+        if (firstCalledLead) {
+          setLeads(prevLeads => 
+            prevLeads.map(l => 
+              l.id === firstCalledLead.lead_id ? { ...l, called: true } : l
+            )
+          );
+          
+          // If the lead has a call result, set it for display
+          if (firstCalledLead.call_result) {
+            setCallResult(firstCalledLead.call_result);
+          }
+        }
+        
+        toast.success('Batch calling initiated. First call placed successfully!');
+      } else {
+        toast.warning('Batch calling queue created, but no calls were placed yet.');
+      }
+      
+      // Mark the leads that had errors as not callable
+      data.data.leads.forEach(leadResult => {
+        if (!leadResult.success) {
+          toast.error(`Error with lead ${leadResult.lead_id}: ${leadResult.message}`);
+        }
+      });
+      
+    } catch (error: any) {
+      console.error('Error initiating batch calls:', error);
+      setCallError(error.message || 'Failed to initiate batch calls');
+      toast.error(error.message || 'Failed to initiate batch calls');
+      setCallingInProgress(false);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Call the next lead in the batch
+  const callNextLead = async () => {
+    try {
+      setIsLoading(true);
+      setCallError(null);
+      setCallResult(null);
+      
+      const nextIndex = currentCallIndex + 1;
+      
+      if (nextIndex >= selectedLeads.length) {
+        // End of batch
+        setCallingInProgress(false);
+        setCurrentCallIndex(-1);
+        toast.success('All selected leads have been called!');
+        setIsLoading(false);
+        return;
+      }
+      
+      // Get the next lead ID
+      const nextLeadId = selectedLeads[nextIndex];
+      
+      // Find the selected lead and script
+      const lead = leads.find(l => l.id === nextLeadId);
+      const script = callScripts.find(s => s.id === selectedScript);
+      
+      if (!lead) {
+        throw new Error('Next lead not found');
+      }
+      
+      if (!script) {
+        throw new Error('Please select a call script');
+      }
+      
+      // Use lead's phone number
+      const phoneNumber = lead.phone;
+      
+      if (!phoneNumber) {
+        throw new Error('Lead has no phone number. Please select a different lead.');
+      }
+      
+      // Make the call
+      const response = await fetch('/api/v1/calls/place', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          phone_number: phoneNumber,
+          lead_id: lead.id,
+          call_script: script
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to initiate call');
+      }
+      
+      // Update UI state
+      setCurrentCallIndex(nextIndex);
+      setCallResult(data.data);
+      
+      // Mark this lead as called
+      setLeads(prevLeads => 
+        prevLeads.map(l => 
+          l.id === lead.id ? { ...l, called: true } : l
+        )
+      );
+      
+      toast.success(`Call to ${lead.first_name} ${lead.last_name} initiated successfully!`);
+    } catch (error: any) {
+      console.error('Error initiating next call:', error);
+      setCallError(error.message || 'Failed to initiate next call');
+      toast.error(error.message || 'Failed to initiate next call');
     } finally {
       setIsLoading(false);
     }
@@ -222,11 +421,11 @@ export default function ColdCallingPage() {
     !window.location.hostname.includes('ngrok');
   
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      <h1 className="text-2xl font-bold">Cold Calling</h1>
+    <div className="min-h-screen bg-gray-50">
+      <h1 className="text-2xl font-bold mb-6">Cold Calling</h1>
       
       {isProduction && (
-        <Alert variant="warning" className="bg-amber-50 border-amber-500">
+        <Alert variant="warning" className="bg-amber-50 border-amber-500 mb-6">
           <AlertCircle className="h-4 w-4 text-amber-600" />
           <AlertTitle>Attention</AlertTitle>
           <AlertDescription>
@@ -236,88 +435,212 @@ export default function ColdCallingPage() {
         </Alert>
       )}
       
-      <Card>
-        <CardHeader>
-          <CardTitle>Make a Call</CardTitle>
-          <CardDescription>
-            Select a lead and a script to make a cold call using AI voice technology.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="lead">Select Lead</Label>
-              <select
-                id="lead"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-                value={selectedLead}
-                onChange={(e) => setSelectedLead(e.target.value)}
-              >
-                <option value="">Select a lead</option>
-                {leads.map((lead) => (
-                  <option key={lead.id} value={lead.id}>
-                    {lead.first_name} {lead.last_name} - {lead.company_name || 'No Company'}
-                  </option>
-                ))}
-              </select>
-              
-              {selectedLead && (
-                <div className="mt-4 text-sm space-y-2">
-                  <p><strong>Phone:</strong> {leads.find(l => l.id === selectedLead)?.phone || 'No phone number'}</p>
-                  <p><strong>Email:</strong> {leads.find(l => l.id === selectedLead)?.email || 'No email'}</p>
-                  <p><strong>Company:</strong> {leads.find(l => l.id === selectedLead)?.company_name || 'No company'}</p>
+      <Tabs defaultValue="single">
+        <TabsList>
+          <TabsTrigger value="single">Single Call</TabsTrigger>
+          <TabsTrigger value="batch">Batch Calling</TabsTrigger>
+        </TabsList>
+        
+        <TabsContent value="single">
+          <Card>
+            <CardHeader>
+              <CardTitle>Make a Single Call</CardTitle>
+              <CardDescription>
+                Select a lead and a script to make a cold call using AI voice technology.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="lead">Select Lead</Label>
+                  <select
+                    id="lead"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={selectedLead}
+                    onChange={(e) => setSelectedLead(e.target.value)}
+                  >
+                    <option value="">Select a lead</option>
+                    {leads.map((lead) => (
+                      <option key={lead.id} value={lead.id}>
+                        {lead.first_name} {lead.last_name} - {lead.company_name || 'No Company'} - {lead.phone || 'No Phone'}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  {selectedLead && (
+                    <div className="mt-4 text-sm space-y-2">
+                      <p><strong>Phone:</strong> {leads.find(l => l.id === selectedLead)?.phone || 'No phone number'}</p>
+                      <p><strong>Email:</strong> {leads.find(l => l.id === selectedLead)?.email || 'No email'}</p>
+                      <p><strong>Company:</strong> {leads.find(l => l.id === selectedLead)?.company_name || 'No company'}</p>
+                    </div>
+                  )}
+                  
+                  <div className="mt-4">
+                    <Label htmlFor="customPhone">Custom Phone Number (Optional)</Label>
+                    <Input
+                      id="customPhone"
+                      placeholder="e.g. +1234567890"
+                      value={customPhoneNumber}
+                      onChange={(e) => setCustomPhoneNumber(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Enter a custom phone number if you want to override the lead's phone.
+                    </p>
+                  </div>
                 </div>
-              )}
-              
-              <div className="mt-4">
-                <Label htmlFor="customPhone">Custom Phone Number (Optional)</Label>
-                <Input
-                  id="customPhone"
-                  placeholder="e.g. +1234567890"
-                  value={customPhoneNumber}
-                  onChange={(e) => setCustomPhoneNumber(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Enter a custom phone number if you want to override the lead's phone.
-                </p>
+                
+                <div>
+                  <Label htmlFor="script">Select Call Script</Label>
+                  <select
+                    id="script"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={selectedScript}
+                    onChange={(e) => setSelectedScript(e.target.value)}
+                  >
+                    <option value="">Select a script</option>
+                    {callScripts.map((script) => (
+                      <option key={script.id} value={script.id}>
+                        {script.name}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  {selectedScript && (
+                    <div className="mt-4 text-sm space-y-2">
+                      <p><strong>Greeting:</strong> {callScripts.find(s => s.id === selectedScript)?.greeting}</p>
+                      <p><strong>Introduction:</strong> {callScripts.find(s => s.id === selectedScript)?.introduction}</p>
+                      <p><strong>Talking Points:</strong> {callScripts.find(s => s.id === selectedScript)?.talking_points.join(', ')}</p>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-            
-            <div>
-              <Label htmlFor="script">Select Call Script</Label>
-              <select
-                id="script"
-                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-                value={selectedScript}
-                onChange={(e) => setSelectedScript(e.target.value)}
-              >
-                <option value="">Select a script</option>
-                {callScripts.map((script) => (
-                  <option key={script.id} value={script.id}>
-                    {script.name}
-                  </option>
-                ))}
-              </select>
-              
-              {selectedScript && (
-                <div className="mt-4 text-sm space-y-2">
-                  <p><strong>Greeting:</strong> {callScripts.find(s => s.id === selectedScript)?.greeting}</p>
-                  <p><strong>Introduction:</strong> {callScripts.find(s => s.id === selectedScript)?.introduction}</p>
-                  <p><strong>Talking Points:</strong> {callScripts.find(s => s.id === selectedScript)?.talking_points.join(', ')}</p>
+            </CardContent>
+            <CardFooter className="flex justify-between">
+              <Button variant="outline" onClick={() => router.push('/leads/add')}>
+                <UserPlus className="mr-2 h-4 w-4" /> Add New Lead
+              </Button>
+              <Button onClick={() => initiateCall()} disabled={isLoading}>
+                <Phone className="mr-2 h-4 w-4" /> {isLoading ? 'Initiating Call...' : 'Make Call'}
+              </Button>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+        
+        <TabsContent value="batch">
+          <Card>
+            <CardHeader>
+              <CardTitle>Batch Calling</CardTitle>
+              <CardDescription>
+                Select multiple leads to call in sequence using the same script.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="mb-2 block">Select Leads to Call</Label>
+                  <div className="border rounded-md p-2 max-h-60 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[50px]">Select</TableHead>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Phone</TableHead>
+                          <TableHead className="w-[80px]">Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {leads.map((lead) => (
+                          <TableRow key={lead.id}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedLeads.includes(lead.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setSelectedLeads([...selectedLeads, lead.id]);
+                                  } else {
+                                    setSelectedLeads(selectedLeads.filter(id => id !== lead.id));
+                                  }
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              {lead.first_name} {lead.last_name}
+                            </TableCell>
+                            <TableCell>
+                              {lead.phone || 'No phone'}
+                            </TableCell>
+                            <TableCell>
+                              {lead.called ? (
+                                <Badge variant="success">Called</Badge>
+                              ) : selectedLeads.includes(lead.id) ? (
+                                <Badge variant="secondary">Queued</Badge>
+                              ) : (
+                                <Badge variant="outline">Not Selected</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    Selected: {selectedLeads.length} leads
+                  </div>
                 </div>
+                
+                <div>
+                  <Label htmlFor="batchScript">Select Call Script</Label>
+                  <select
+                    id="batchScript"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                    value={selectedScript}
+                    onChange={(e) => setSelectedScript(e.target.value)}
+                  >
+                    <option value="">Select a script</option>
+                    {callScripts.map((script) => (
+                      <option key={script.id} value={script.id}>
+                        {script.name}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  {callingInProgress && (
+                    <Alert className="mt-4 bg-blue-50 border-blue-200">
+                      <Info className="h-4 w-4 text-blue-500" />
+                      <AlertTitle>Batch Calling In Progress</AlertTitle>
+                      <AlertDescription>
+                        <p className="mb-2">
+                          Currently calling lead {currentCallIndex + 1} of {selectedLeads.length}
+                        </p>
+                        <p>
+                          {leads.find(l => l.id === selectedLeads[currentCallIndex])?.first_name} {leads.find(l => l.id === selectedLeads[currentCallIndex])?.last_name}
+                        </p>
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+            <CardFooter className="flex justify-between">
+              <Button variant="outline" onClick={() => router.push('/leads/add')}>
+                <UserPlus className="mr-2 h-4 w-4" /> Add New Lead
+              </Button>
+              
+              {callingInProgress ? (
+                <Button onClick={callNextLead} disabled={isLoading}>
+                  <PhoneOutgoing className="mr-2 h-4 w-4" /> 
+                  {isLoading ? 'Processing...' : 'Call Next Lead'}
+                </Button>
+              ) : (
+                <Button onClick={startBatchCalling} disabled={isLoading || selectedLeads.length === 0}>
+                  <List className="mr-2 h-4 w-4" /> 
+                  {isLoading ? 'Processing...' : 'Start Batch Calling'}
+                </Button>
               )}
-            </div>
-          </div>
-        </CardContent>
-        <CardFooter className="flex justify-between">
-          <Button variant="outline" onClick={() => router.push('/leads/add')}>
-            <UserPlus className="mr-2 h-4 w-4" /> Add New Lead
-          </Button>
-          <Button onClick={initiateCall} disabled={isLoading}>
-            <Phone className="mr-2 h-4 w-4" /> {isLoading ? 'Initiating Call...' : 'Make Call'}
-          </Button>
-        </CardFooter>
-      </Card>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+      </Tabs>
       
       {callResult && (
         <Card>
@@ -435,12 +758,12 @@ export default function ColdCallingPage() {
                 value={newScript.voice}
                 onChange={(e) => setNewScript({ ...newScript, voice: e.target.value })}
               >
-                <option value="shimmer">Shimmer (Female)</option>
-                <option value="fable">Fable (Male)</option>
-                <option value="onyx">Onyx (Male)</option>
-                <option value="nova">Nova (Female)</option>
-                <option value="ember">Ember (Male)</option>
-                <option value="alloy">Alloy (Neutral)</option>
+                <option value="rachel">Rachel (Female)</option>
+                <option value="antoni">Antoni (Male)</option>
+                <option value="josh">Josh (Male)</option>
+                <option value="arnold">Arnold (Male)</option>
+                <option value="adam">Adam (Male)</option>
+                <option value="sam">Sam (Female)</option>
               </select>
             </div>
             

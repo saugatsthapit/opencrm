@@ -9,8 +9,28 @@ const {
   handleVapiWebhook
 } = require('../services/callService.js');
 const { supabase } = require('../config/supabase.js');
+const callValidation = require('../middleware/callValidation');
+const { createClient } = require('@supabase/supabase-js');
 
 const router = express.Router();
+
+// For additional operations that might need higher privileges, create a service client
+// but only if the environment variables are available
+let supabaseServiceClient;
+try {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseKey = process.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('Supabase URL or key missing in environment variables. Service client will not be available.');
+    console.warn('This is fine for development if you are not using Supabase features.');
+  } else {
+    supabaseServiceClient = createClient(supabaseUrl, supabaseKey);
+    console.log('Supabase service client initialized successfully');
+  }
+} catch (error) {
+  console.error('Failed to initialize Supabase service client:', error);
+}
 
 /**
  * Place an outbound call
@@ -64,57 +84,158 @@ router.post('/', async (req, res) => {
 
 /**
  * @route POST /api/v1/calls/place
- * @desc Place a new outbound call to a lead
+ * @desc Place an outbound call to a lead using VAPI
+ * @access Private
  */
-router.post('/place', async (req, res) => {
+router.post('/place', callValidation.validateOutboundCall, async (req, res) => {
   try {
-    const { phone_number, lead_id, lead_sequence_id, step_id, call_script } = req.body;
+    const { phone_number, lead_id, call_script } = req.body;
     
-    if (!phone_number || !lead_id) {
+    if (!phone_number) {
       return res.status(400).json({
         success: false,
-        message: 'Phone number and lead ID are required'
+        message: 'Phone number is required'
       });
     }
     
-    // Fetch lead data from Supabase
-    const { data: lead, error: leadError } = await supabase
-      .from('leads')
-      .select('*')
-      .eq('id', lead_id)
-      .single();
+    if (!lead_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Lead ID is required'
+      });
+    }
     
-    if (leadError) {
-      console.error('Error fetching lead data:', leadError);
+    if (!call_script) {
+      return res.status(400).json({
+        success: false,
+        message: 'Call script is required'
+      });
+    }
+    
+    const leadData = await fetchLeadData(lead_id);
+    if (!leadData) {
       return res.status(404).json({
         success: false,
         message: 'Lead not found'
       });
     }
     
-    console.log(`Call request received for ${phone_number}`, {
-      lead_id,
-      lead_sequence_id,
-      step_id
-    });
+    console.log('Placing call with VAPI to:', phone_number);
+    console.log('Lead data:', leadData);
     
-    const callResult = await placeCall(
-      phone_number,
-      lead,
-      call_script,
-      lead_sequence_id,
-      step_id
-    );
+    // Update the call script with lead data
+    const processedScript = processScript(call_script, leadData);
     
-    return res.status(201).json({
+    // Place the call
+    const result = await placeCall(phone_number, processedScript, leadData);
+    
+    // Return success response
+    return res.status(200).json({
       success: true,
-      data: callResult
+      message: 'Call initiated successfully',
+      data: result
     });
   } catch (error) {
-    console.error('Error in /calls/place:', error);
+    console.error('Error placing call:', error);
     return res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Failed to place call'
+    });
+  }
+});
+
+/**
+ * @route POST /api/v1/calls/place-batch
+ * @desc Place multiple outbound calls to leads using VAPI
+ * @access Private
+ */
+router.post('/place-batch', callValidation.validateOutboundCall, async (req, res) => {
+  try {
+    const { lead_ids, call_script, delay_seconds = 60 } = req.body;
+    
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one lead ID is required'
+      });
+    }
+    
+    if (!call_script) {
+      return res.status(400).json({
+        success: false,
+        message: 'Call script is required'
+      });
+    }
+    
+    // Fetch all leads data in one go to be efficient
+    const leadResults = [];
+    
+    for (const lead_id of lead_ids) {
+      const leadData = await fetchLeadData(lead_id);
+      
+      if (!leadData) {
+        leadResults.push({
+          lead_id,
+          success: false,
+          message: 'Lead not found'
+        });
+        continue;
+      }
+      
+      if (!leadData.phone) {
+        leadResults.push({
+          lead_id,
+          success: false,
+          message: 'Lead has no phone number'
+        });
+        continue;
+      }
+      
+      // Add to queue for processing (only first call is immediate)
+      leadResults.push({
+        lead_id,
+        phone: leadData.phone,
+        name: `${leadData.first_name} ${leadData.last_name}`,
+        queued: true,
+        success: true,
+        message: 'Lead queued for calling'
+      });
+    }
+    
+    // Process the first lead immediately if there are valid leads
+    const validLeads = leadResults.filter(result => result.success);
+    if (validLeads.length > 0) {
+      const firstLead = validLeads[0];
+      const leadData = await fetchLeadData(firstLead.lead_id);
+      const processedScript = processScript(call_script, leadData);
+      
+      try {
+        const result = await placeCall(firstLead.phone, processedScript, leadData);
+        firstLead.call_result = result;
+        firstLead.queued = false;
+        firstLead.message = 'Call initiated successfully';
+      } catch (error) {
+        console.error(`Error placing call to lead ${firstLead.lead_id}:`, error);
+        firstLead.success = false;
+        firstLead.queued = false;
+        firstLead.message = error.message || 'Failed to place call';
+      }
+    }
+    
+    // Return success response with information about all leads
+    return res.status(200).json({
+      success: true,
+      message: `Processed ${leadResults.length} leads. ${validLeads.length} valid for calling.`,
+      data: {
+        leads: leadResults,
+        first_call_placed: validLeads.length > 0
+      }
+    });
+  } catch (error) {
+    console.error('Error placing batch calls:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to place batch calls'
     });
   }
 });
@@ -240,25 +361,26 @@ router.post('/recording', async (req, res) => {
 
 /**
  * @route POST /api/v1/calls/vapi-webhook
- * @desc Webhook endpoint for receiving VAPI call events
+ * @desc Handle VAPI webhooks
+ * @access Public
  */
 router.post('/vapi-webhook', async (req, res) => {
   try {
-    console.log('VAPI webhook received:', req.body);
+    console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
     
-    // Process the webhook asynchronously
-    handleVapiWebhook(req.body).catch(error => {
-      console.error('Error processing VAPI webhook:', error);
+    // Process the webhook
+    await handleVapiWebhook(req.body);
+    
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: 'Webhook processed successfully'
     });
-    
-    // Return immediately with 200 OK to acknowledge receipt
-    return res.status(200).json({ success: true });
   } catch (error) {
-    console.error('Error in VAPI webhook handler:', error);
-    // Still return 200 to prevent VAPI from retrying
-    return res.status(200).json({ 
-      success: false, 
-      message: 'Webhook received but error during processing' 
+    console.error('Error processing VAPI webhook:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to process webhook'
     });
   }
 });
@@ -299,6 +421,29 @@ router.get('/history/:leadId', async (req, res) => {
   try {
     const { leadId } = req.params;
     
+    if (!supabase) {
+      console.warn('Supabase client not available, returning mock call history');
+      // Return mock data for development
+      return res.json({
+        success: true,
+        calls: [
+          {
+            id: 'mock-call-1',
+            lead_id: leadId,
+            call_id: 'mock-vapi-call-1',
+            status: 'completed',
+            created_at: new Date().toISOString(),
+            conversations: [
+              {
+                transcript: 'This is a mock transcript for development.',
+                recording_url: 'https://example.com/mock-recording.mp3'
+              }
+            ]
+          }
+        ]
+      });
+    }
+    
     const { data, error } = await supabase
       .from('call_tracking')
       .select(`
@@ -309,6 +454,7 @@ router.get('/history/:leadId', async (req, res) => {
       .order('created_at', { ascending: false });
     
     if (error) {
+      console.error('Error fetching call history:', error);
       throw error;
     }
     
@@ -325,5 +471,92 @@ router.get('/history/:leadId', async (req, res) => {
     });
   }
 });
+
+/**
+ * Fetch lead data from Supabase
+ * @param {string} leadId - The ID of the lead
+ * @returns {Promise<object>} - The lead data
+ */
+async function fetchLeadData(leadId) {
+  try {
+    // If no leadId provided, return null
+    if (!leadId) {
+      console.warn('No lead ID provided to fetchLeadData');
+      return null;
+    }
+    
+    // Use main supabase client from config
+    if (!supabase) {
+      console.warn('Supabase client not available, returning mock lead data');
+      // For development, we can return mock data when Supabase is not configured
+      return {
+        id: leadId,
+        first_name: 'Test',
+        last_name: 'User',
+        company_name: 'Test Company',
+        email: 'test@example.com',
+        phone: '+12345678900',
+        title: 'Test Title'
+      };
+    }
+    
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', leadId)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching lead data:', error);
+      throw error;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error in fetchLeadData:', error);
+    return null;
+  }
+}
+
+/**
+ * Process the call script and replace placeholders with lead data
+ * @param {object} script - The call script
+ * @param {object} leadData - The lead data
+ * @returns {object} - The processed script
+ */
+function processScript(script, leadData) {
+  if (!script || !leadData) return script;
+  
+  const processString = (str) => {
+    if (!str) return str;
+    
+    return str
+      .replace(/{{name}}/g, `${leadData.first_name} ${leadData.last_name}`)
+      .replace(/{{firstName}}/g, leadData.first_name)
+      .replace(/{{lastName}}/g, leadData.last_name)
+      .replace(/{{company}}/g, leadData.company_name || 'your company')
+      .replace(/{{title}}/g, leadData.title || 'your role')
+      .replace(/{{email}}/g, leadData.email || 'your email');
+  };
+  
+  const processedScript = { ...script };
+  
+  // Process greeting and introduction
+  processedScript.greeting = processString(script.greeting);
+  processedScript.introduction = processString(script.introduction);
+  processedScript.closing = processString(script.closing);
+  
+  // Process talking points
+  if (Array.isArray(script.talking_points)) {
+    processedScript.talking_points = script.talking_points.map(point => processString(point));
+  }
+  
+  // Process questions
+  if (Array.isArray(script.questions)) {
+    processedScript.questions = script.questions.map(question => processString(question));
+  }
+  
+  return processedScript;
+}
 
 module.exports = router; 

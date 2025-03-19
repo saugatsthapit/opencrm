@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Phone, PhoneCall, History, Settings, ExternalLink } from 'lucide-react';
+import { Phone, PhoneCall, History, Settings, List, CheckCircle, Users } from 'lucide-react';
 import CallScriptEditor from '../components/CallScriptEditor';
 import CallHistory from '../components/CallHistory';
 import { defaultCallScript, placeCall, setNgrokUrl, clearNgrokSettings } from '../lib/vapi';
@@ -15,6 +15,12 @@ export default function ColdCalling() {
   const [error, setError] = useState<string | null>(null);
   const [manualNgrokUrl, setManualNgrokUrl] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
+  
+  // Batch calling state
+  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
+  const [batchCallInProgress, setBatchCallInProgress] = useState(false);
+  const [currentBatchIndex, setCurrentBatchIndex] = useState(-1);
+  const [batchCallResults, setBatchCallResults] = useState<any[]>([]);
 
   const isProduction = window.location.hostname === 'fastcrm.netlify.app';
   const hasNgrokConfigured = isProduction && localStorage.getItem('ngrok_url');
@@ -33,7 +39,14 @@ export default function ColdCalling() {
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setLeads(data || []);
+      
+      // Add called property to each lead for batch calling
+      const updatedData = (data || []).map(lead => ({
+        ...lead,
+        called: false
+      }));
+      
+      setLeads(updatedData);
     } catch (err: any) {
       console.error('Error fetching leads:', err);
       setError(err.message);
@@ -60,6 +73,14 @@ export default function ColdCalling() {
       );
 
       setCallResult(response);
+      
+      // Mark this lead as called
+      setLeads(prevLeads => 
+        prevLeads.map(l => 
+          l.id === selectedLead ? { ...l, called: true } : l
+        )
+      );
+      
       // Refresh call history after making a call
       setActiveTab('history');
     } catch (err: any) {
@@ -93,6 +114,144 @@ export default function ColdCalling() {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return 'Unknown Lead';
     return `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email || 'Unknown';
+  };
+  
+  // Toggle a lead's selection for batch calling
+  const toggleLeadSelection = (leadId: string) => {
+    setSelectedLeads(prev => {
+      if (prev.includes(leadId)) {
+        return prev.filter(id => id !== leadId);
+      } else {
+        return [...prev, leadId];
+      }
+    });
+  };
+  
+  // Start batch calling process
+  const startBatchCalling = async () => {
+    if (selectedLeads.length === 0) {
+      setError('Please select at least one lead to call');
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      setError(null);
+      setBatchCallResults([]);
+      
+      // Call the batch API endpoint
+      const response = await fetch('/api/v1/calls/place-batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          lead_ids: selectedLeads,
+          call_script: callScript
+        }),
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.message || 'Failed to initiate batch calls');
+      }
+      
+      // Set batch calling in progress
+      setBatchCallInProgress(true);
+      
+      // If first call was placed, set current index to 0
+      if (data.data.first_call_placed) {
+        setCurrentBatchIndex(0);
+        
+        // Find the lead that was called and mark it
+        const firstCalledLead = data.data.leads.find((lead: any) => !lead.queued && lead.success);
+        if (firstCalledLead) {
+          setLeads(prevLeads => 
+            prevLeads.map(l => 
+              l.id === firstCalledLead.lead_id ? { ...l, called: true } : l
+            )
+          );
+          
+          // Store call result
+          setBatchCallResults([firstCalledLead.call_result]);
+          
+          // Set current call result
+          setCallResult(firstCalledLead.call_result);
+        }
+      }
+      
+      // Display any errors for specific leads
+      data.data.leads.forEach((leadResult: any) => {
+        if (!leadResult.success) {
+          console.error(`Error with lead ${leadResult.lead_id}: ${leadResult.message}`);
+        }
+      });
+      
+    } catch (err: any) {
+      console.error('Error initiating batch calls:', err);
+      setError(err.message);
+      setBatchCallInProgress(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Call the next lead in the batch
+  const callNextLead = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      const nextIndex = currentBatchIndex + 1;
+      
+      if (nextIndex >= selectedLeads.length) {
+        // End of batch
+        setBatchCallInProgress(false);
+        setCurrentBatchIndex(-1);
+        setLoading(false);
+        return;
+      }
+      
+      // Get the next lead ID
+      const nextLeadId = selectedLeads[nextIndex];
+      
+      // Find the lead
+      const lead = leads.find(l => l.id === nextLeadId);
+      
+      if (!lead) {
+        throw new Error('Next lead not found');
+      }
+      
+      if (!lead.phone) {
+        throw new Error('Lead has no phone number. Skipping to next lead.');
+      }
+      
+      // Make the call
+      const response = await placeCall(
+        lead.phone,
+        lead.id,
+        callScript
+      );
+      
+      // Update state
+      setCurrentBatchIndex(nextIndex);
+      setBatchCallResults(prev => [...prev, response]);
+      setCallResult(response);
+      
+      // Mark this lead as called
+      setLeads(prevLeads => 
+        prevLeads.map(l => 
+          l.id === lead.id ? { ...l, called: true } : l
+        )
+      );
+      
+    } catch (err: any) {
+      console.error('Error initiating next call:', err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -179,22 +338,80 @@ export default function ColdCalling() {
           ) : leads.length === 0 ? (
             <p className="text-gray-500">No leads found. Please add some leads first.</p>
           ) : (
-            <ul className="divide-y divide-gray-200">
-              {leads.map((lead) => (
-                <li 
-                  key={lead.id} 
-                  className={`py-2 px-2 cursor-pointer hover:bg-gray-50 ${selectedLead === lead.id ? 'bg-blue-50' : ''}`}
-                  onClick={() => {
-                    setSelectedLead(lead.id);
-                    setPhoneNumber(lead.phone || '');
-                  }}
-                >
-                  <div className="font-medium">{lead.first_name} {lead.last_name}</div>
-                  <div className="text-sm text-gray-500">{lead.company_name}</div>
-                  <div className="text-sm text-gray-500">{lead.phone}</div>
-                </li>
-              ))}
-            </ul>
+            <>
+              {activeTab === 'batch' && (
+                <div className="mb-4">
+                  <p className="text-sm mb-2">Selected: {selectedLeads.length} leads</p>
+                  <div className="flex justify-between items-center">
+                    <button
+                      className="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded"
+                      onClick={() => setSelectedLeads(leads.map(l => l.id))}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      className="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded"
+                      onClick={() => setSelectedLeads([])}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              <ul className="divide-y divide-gray-200">
+                {leads.map((lead) => (
+                  <li 
+                    key={lead.id} 
+                    className={`py-2 px-2 cursor-pointer hover:bg-gray-50 ${
+                      (selectedLead === lead.id && activeTab !== 'batch') || 
+                      (activeTab === 'batch' && selectedLeads.includes(lead.id)) 
+                        ? 'bg-blue-50' 
+                        : ''
+                    }`}
+                    onClick={() => {
+                      if (activeTab === 'batch') {
+                        toggleLeadSelection(lead.id);
+                      } else {
+                        setSelectedLead(lead.id);
+                        setPhoneNumber(lead.phone || '');
+                      }
+                    }}
+                  >
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <div className="font-medium">{lead.first_name} {lead.last_name}</div>
+                        <div className="text-sm text-gray-500">{lead.company_name}</div>
+                        <div className="text-sm text-gray-500">{lead.phone}</div>
+                      </div>
+                      {activeTab === 'batch' && (
+                        <div className="flex items-center">
+                          {lead.called && (
+                            <span className="inline-block rounded-full bg-green-100 text-green-800 px-2 py-0.5 text-xs mr-2">
+                              Called
+                            </span>
+                          )}
+                          <input 
+                            type="checkbox" 
+                            className="h-4 w-4"
+                            checked={selectedLeads.includes(lead.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedLeads(prev => [...prev, lead.id]);
+                              } else {
+                                setSelectedLeads(prev => prev.filter(id => id !== lead.id));
+                              }
+                              e.stopPropagation();
+                            }}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
         
@@ -207,7 +424,14 @@ export default function ColdCalling() {
               onClick={() => setActiveTab('calls')}
             >
               <Phone size={18} className="mr-2" />
-              Make Call
+              Single Call
+            </button>
+            <button
+              className={`px-4 py-2 flex items-center ${activeTab === 'batch' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
+              onClick={() => setActiveTab('batch')}
+            >
+              <Users size={18} className="mr-2" />
+              Batch Calling
             </button>
             <button
               className={`px-4 py-2 flex items-center ${activeTab === 'script' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
@@ -289,6 +513,106 @@ export default function ColdCalling() {
                   </div>
                 ) : (
                   <p className="text-gray-500">Please select a lead from the list to make a call.</p>
+                )}
+              </div>
+            )}
+            
+            {activeTab === 'batch' && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4">Batch Calling</h3>
+                
+                <div className="mb-4">
+                  <p>Select multiple leads from the list to include in your batch call.</p>
+                  
+                  {batchCallInProgress && (
+                    <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                      <h4 className="font-medium text-blue-800">Batch Calling In Progress</h4>
+                      <p className="text-sm text-blue-700 mt-1">
+                        Currently calling lead {currentBatchIndex + 1} of {selectedLeads.length}
+                      </p>
+                      <p className="text-sm text-blue-700">
+                        Lead: {getLeadName(selectedLeads[currentBatchIndex])}
+                      </p>
+                    </div>
+                  )}
+                  
+                  {callResult && (
+                    <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
+                      <h4 className="font-medium text-green-800">Call Initiated!</h4>
+                      <p className="text-sm text-green-700">
+                        Call ID: {callResult.call_id || callResult.id}
+                      </p>
+                      <p className="text-sm text-green-700">
+                        Status: {callResult.status || 'Initiated'}
+                      </p>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="flex mt-6">
+                  {batchCallInProgress ? (
+                    <button
+                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
+                      onClick={callNextLead}
+                      disabled={loading || currentBatchIndex >= selectedLeads.length - 1}
+                    >
+                      {loading ? (
+                        <>
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Calling Next...
+                        </>
+                      ) : (
+                        <>
+                          <PhoneCall size={18} className="mr-2" />
+                          Call Next Lead
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
+                      onClick={startBatchCalling}
+                      disabled={loading || selectedLeads.length === 0}
+                    >
+                      {loading ? (
+                        <>
+                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Processing...
+                        </>
+                      ) : (
+                        <>
+                          <List size={18} className="mr-2" />
+                          Start Batch Calling ({selectedLeads.length} leads)
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                
+                {batchCallResults.length > 0 && (
+                  <div className="mt-6">
+                    <h4 className="font-medium mb-2">Batch Call Results:</h4>
+                    <ul className="divide-y divide-gray-200 border rounded">
+                      {batchCallResults.map((result, index) => (
+                        <li key={index} className="p-3">
+                          <div className="flex items-center">
+                            <CheckCircle size={16} className="text-green-500 mr-2" />
+                            <p className="text-sm">
+                              Lead: {getLeadName(selectedLeads[index])} - 
+                              Call ID: {result.call_id || result.id} - 
+                              Status: {result.status || 'Initiated'}
+                            </p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
             )}

@@ -11,8 +11,8 @@ const VAPI_BASE_URL = 'https://api.vapi.ai/call';
 const PHONE_SERVICE_API_KEY = process.env.VITE_PHONE_SERVICE_API_KEY;
 
 // VAPI configuration for outbound calls
-const VAPI_ASSISTANT_ID = '75e78c62-2ff1-4d35-8542-bd90999af156';
-const VAPI_PHONE_NUMBER_ID = 'e314a4b1-8538-4654-a425-17ce97a39afb';
+const VAPI_ASSISTANT_ID = process.env.VITE_VAPI_ASSISTANT_ID;
+const VAPI_PHONE_NUMBER_ID = process.env.VITE_VAPI_PHONE_NUMBER_ID;
 
 // Initialize Twilio client with your credentials
 const twilioClient = twilio(
@@ -22,19 +22,15 @@ const twilioClient = twilio(
 const TWILIO_PHONE_NUMBER = process.env.VITE_TWILIO_PHONE_NUMBER;
 
 // Initialize VAPI client with API key
-const vapiClient = new VapiClient({ token: VAPI_API_KEY });
+const vapiClient = new VapiClient({ apiKey: VAPI_API_KEY });
 
 // Track call statuses in memory for quick access
 const callStatusMap = new Map();
 
 // Add this function to get a proper webhook URL that works with external services
-const getPublicWebhookUrl = (path) => {
-  const configuredUrl = process.env.VITE_APP_URL;
-  // If the URL is localhost or not set, use the production URL
-  if (!configuredUrl || configuredUrl.includes('localhost')) {
-    return `https://fastcrm.netlify.app${path}`;
-  }
-  return `${configuredUrl}${path}`;
+const getPublicWebhookUrl = () => {
+  const baseUrl = process.env.SERVER_URL || 'http://localhost:8001';
+  return `${baseUrl}/api/v1/calls/vapi-webhook`;
 };
 
 /**
@@ -123,7 +119,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
                       .replace(/{{company}}/g, lead.company_name || 'your company');
 
     // Webhook configuration for receiving call events
-    const webhookUrl = getPublicWebhookUrl('/api/v1/calls/vapi-webhook');
+    const webhookUrl = getPublicWebhookUrl();
     console.log(`Webhook URL for VAPI events: ${webhookUrl}`);
     
     // Check if real calls are enabled (either in production or explicitly enabled)
