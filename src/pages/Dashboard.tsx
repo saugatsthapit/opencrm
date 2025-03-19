@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Upload, Search, Filter, SendHorizontal, AlertCircle, Trash2, AlertTriangle, Clock, CheckCircle, XCircle, Mail } from 'lucide-react';
+import { Upload, Search, Filter, SendHorizontal, AlertCircle, Trash2, AlertTriangle, Clock, CheckCircle, XCircle, Mail, X, Info, Eye } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 
@@ -12,6 +12,19 @@ interface Lead {
   company_name: string | null;
   company_employee_count: number | null;
   title: string | null;
+  mobile_phone1?: string | null;
+  mobile_phone2?: string | null;
+  linkedin?: string | null;
+  location?: string | null;
+  company_domain?: string | null;
+  company_website?: string | null;
+  company_employee_count_range?: string | null;
+  company_founded?: number | null;
+  company_industry?: string | null;
+  company_type?: string | null;
+  company_headquarters?: string | null;
+  company_revenue_range?: string | null;
+  company_linkedin_url?: string | null;
   sequences?: {
     id: string;
     name: string;
@@ -52,6 +65,8 @@ const Dashboard = () => {
     count: 0
   });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [showLeadDetails, setShowLeadDetails] = useState(false);
 
   useEffect(() => {
     fetchLeads();
@@ -84,7 +99,7 @@ const Dashboard = () => {
     // Transform the data to include sequence information
     const transformedLeads = (data || []).map(lead => ({
       ...lead,
-      sequences: lead.lead_sequences?.map(ls => ({
+      sequences: lead.lead_sequences?.map((ls: any) => ({
         id: ls.sequence.id,
         name: ls.sequence.name,
         current_step: ls.current_step || 0,
@@ -258,6 +273,204 @@ const Dashboard = () => {
     return Math.round((currentStep / totalSteps) * 100);
   };
 
+  const showLeadDetailsModal = (lead: Lead) => {
+    setSelectedLead(lead);
+    setShowLeadDetails(true);
+  };
+
+  const LeadDetailsModal = ({ lead, onClose }: { lead: Lead, onClose: () => void }) => {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between p-4 border-b">
+            <h2 className="text-xl font-semibold">Lead Details</h2>
+            <button 
+              onClick={onClose}
+              className="p-1 rounded-full hover:bg-gray-100"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+          
+          <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Personal Information */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium border-b pb-2">Contact Information</h3>
+              
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Name</h4>
+                  <p className="text-lg font-semibold">{lead.first_name} {lead.last_name}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Title</h4>
+                  <p>{lead.title || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Email</h4>
+                  <p className="break-all">{lead.email || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Phone</h4>
+                  <p>{lead.mobile_phone1 || 'Not specified'}</p>
+                  {lead.mobile_phone2 && <p>{lead.mobile_phone2}</p>}
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Location</h4>
+                  <p>{lead.location || 'Not specified'}</p>
+                </div>
+                
+                {lead.linkedin && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-500">LinkedIn</h4>
+                    <a 
+                      href={lead.linkedin}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline break-all"
+                    >
+                      {lead.linkedin}
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Company Information */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium border-b pb-2">Company Information</h3>
+              
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Company</h4>
+                  <p className="text-lg font-semibold">{lead.company_name || 'Not specified'}</p>
+                </div>
+                
+                {lead.company_website && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-500">Website</h4>
+                    <a 
+                      href={lead.company_website.startsWith('http') ? lead.company_website : `https://${lead.company_website}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline break-all"
+                    >
+                      {lead.company_website}
+                    </a>
+                  </div>
+                )}
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Industry</h4>
+                  <p>{lead.company_industry || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Company Type</h4>
+                  <p>{lead.company_type || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Size</h4>
+                  <p>{lead.company_employee_count || lead.company_employee_count_range || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Revenue Range</h4>
+                  <p>{lead.company_revenue_range || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Headquarters</h4>
+                  <p>{lead.company_headquarters || 'Not specified'}</p>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm font-medium text-gray-500">Founded</h4>
+                  <p>{lead.company_founded || 'Not specified'}</p>
+                </div>
+                
+                {lead.company_linkedin_url && (
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-500">Company LinkedIn</h4>
+                    <a 
+                      href={lead.company_linkedin_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline break-all"
+                    >
+                      {lead.company_linkedin_url}
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+          
+          {/* Sequences */}
+          {lead.sequences && lead.sequences.length > 0 && (
+            <div className="p-6 border-t">
+              <h3 className="text-lg font-medium mb-4">Active Sequences</h3>
+              <div className="space-y-4">
+                {lead.sequences.map(sequence => (
+                  <div key={sequence.id} className="bg-gray-50 p-4 rounded-lg">
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="font-medium">{sequence.name}</span>
+                      <div className="flex items-center gap-2">
+                        {getStatusIcon(sequence.status)}
+                        <span className="text-sm capitalize">
+                          {sequence.status.replace('_', ' ')}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-blue-600 rounded-full"
+                          style={{
+                            width: `${getProgressPercentage(sequence.current_step + 1, sequence.total_steps)}%`
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        Step {sequence.current_step + 1} of {sequence.total_steps}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          
+          <div className="flex justify-end gap-3 p-4 border-t">
+            <button
+              onClick={() => {
+                // Navigate to cold calling page with this lead pre-selected
+                navigate('/cold-calling', { state: { selectedLeadId: lead.id } });
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              Call this Lead
+            </button>
+            <button
+              onClick={() => {
+                // Navigate to sequences page with this lead pre-selected
+                navigate('/sequences', { state: { selectedLeads: [lead.id] } });
+              }}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+            >
+              Add to Sequence
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       {showDeleteConfirm && (
@@ -286,6 +499,16 @@ const Dashboard = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {showLeadDetails && selectedLead && (
+        <LeadDetailsModal 
+          lead={selectedLead} 
+          onClose={() => {
+            setShowLeadDetails(false);
+            setSelectedLead(null);
+          }} 
+        />
       )}
 
       <div className="flex items-center justify-between">
@@ -395,12 +618,25 @@ const Dashboard = () => {
                   <p className="text-sm text-gray-600">{lead.title}</p>
                   <p className="text-sm text-gray-600">{lead.email}</p>
                 </div>
-                <input
-                  type="checkbox"
-                  checked={selectedLeads.includes(lead.id)}
-                  onChange={() => toggleLeadSelection(lead.id)}
-                  className="mt-1 rounded text-blue-600"
-                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      showLeadDetailsModal(lead);
+                    }}
+                    className="text-blue-600 hover:text-blue-800"
+                    title="View Details"
+                  >
+                    <Eye className="h-5 w-5" />
+                  </button>
+                  <input
+                    type="checkbox"
+                    checked={selectedLeads.includes(lead.id)}
+                    onChange={() => toggleLeadSelection(lead.id)}
+                    className="mt-1 rounded text-blue-600"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                </div>
               </div>
               <div className="mt-2 pt-2 border-t">
                 <p className="text-sm font-medium">{lead.company_name}</p>

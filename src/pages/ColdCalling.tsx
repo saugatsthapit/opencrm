@@ -4,8 +4,10 @@ import CallScriptEditor from '../components/CallScriptEditor';
 import CallHistory from '../components/CallHistory';
 import { defaultCallScript, placeCall, setNgrokUrl, clearNgrokSettings } from '../lib/vapi';
 import { supabase } from '../lib/supabase';
+import { useLocation } from 'react-router-dom';
 
 export default function ColdCalling() {
+  const location = useLocation();
   const [activeTab, setActiveTab] = useState('calls');
   const [callScript, setCallScript] = useState(defaultCallScript);
   const [leads, setLeads] = useState<any[]>([]);
@@ -29,6 +31,31 @@ export default function ColdCalling() {
     // Fetch leads when component mounts
     fetchLeads();
   }, []);
+  
+  // Handle pre-selected lead from navigation
+  useEffect(() => {
+    if (location.state) {
+      if (location.state.selectedLeadId) {
+        // If a single lead was selected in the Dashboard and passed via navigation
+        setSelectedLead(location.state.selectedLeadId);
+        
+        // Find the lead to get the phone number
+        const lead = leads.find(l => l.id === location.state.selectedLeadId);
+        if (lead && lead.phone) {
+          setPhoneNumber(lead.phone);
+        }
+        
+        // Set the active tab to 'calls'
+        setActiveTab('calls');
+      } else if (location.state.selectedLeads && location.state.selectedLeads.length > 0) {
+        // If multiple leads were selected for batch calling
+        setSelectedLeads(location.state.selectedLeads);
+        
+        // Set the active tab to 'batch'
+        setActiveTab('batch');
+      }
+    }
+  }, [location.state, leads]);
 
   const fetchLeads = async () => {
     try {
