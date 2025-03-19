@@ -6,11 +6,23 @@ import { defaultCallScript, placeCall, setNgrokUrl, clearNgrokSettings } from '.
 import { supabase } from '../lib/supabase';
 import { useLocation } from 'react-router-dom';
 
+interface Lead {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  company_name: string | null;
+  mobile_phone1: string | null;
+  mobile_phone2: string | null;
+  title: string | null;
+  called?: boolean;
+}
+
 export default function ColdCalling() {
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('calls');
   const [callScript, setCallScript] = useState(defaultCallScript);
-  const [leads, setLeads] = useState<any[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLead, setSelectedLead] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [callResult, setCallResult] = useState<any>(null);
@@ -37,13 +49,7 @@ export default function ColdCalling() {
     if (location.state) {
       if (location.state.selectedLeadId) {
         // If a single lead was selected in the Dashboard and passed via navigation
-        setSelectedLead(location.state.selectedLeadId);
-        
-        // Find the lead to get the phone number
-        const lead = leads.find(l => l.id === location.state.selectedLeadId);
-        if (lead && lead.phone) {
-          setPhoneNumber(lead.phone);
-        }
+        handleLeadSelection(location.state.selectedLeadId);
         
         // Set the active tab to 'calls'
         setActiveTab('calls');
@@ -62,7 +68,7 @@ export default function ColdCalling() {
       setLoading(true);
       const { data, error } = await supabase
         .from('leads')
-        .select('id, first_name, last_name, email, company_name, phone')
+        .select('id, first_name, last_name, email, company_name, mobile_phone1, mobile_phone2, title')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -74,6 +80,14 @@ export default function ColdCalling() {
       }));
       
       setLeads(updatedData);
+      
+      // If a lead is already selected, update its phone number
+      if (selectedLead) {
+        const selectedLeadData = updatedData.find(l => l.id === selectedLead);
+        if (selectedLeadData && selectedLeadData.mobile_phone1) {
+          setPhoneNumber(selectedLeadData.mobile_phone1);
+        }
+      }
     } catch (err: any) {
       console.error('Error fetching leads:', err);
       setError(err.message);
@@ -154,10 +168,24 @@ export default function ColdCalling() {
     });
   };
   
+  // Helper to check if a lead has a valid phone number
+  const hasValidPhone = (leadId: string): boolean => {
+    const lead = leads.find(l => l.id === leadId);
+    return !!lead?.mobile_phone1;
+  };
+  
   // Start batch calling process
   const startBatchCalling = async () => {
     if (selectedLeads.length === 0) {
       setError('Please select at least one lead to call');
+      return;
+    }
+    
+    // Check if any of the selected leads have phone numbers
+    const leadsWithPhones = selectedLeads.filter(id => hasValidPhone(id));
+    
+    if (leadsWithPhones.length === 0) {
+      setError('None of the selected leads have phone numbers. Please add phone numbers first.');
       return;
     }
     
@@ -173,7 +201,7 @@ export default function ColdCalling() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          lead_ids: selectedLeads,
+          lead_ids: leadsWithPhones, // Only send leads with phone numbers
           call_script: callScript
         }),
       });
@@ -243,6 +271,16 @@ export default function ColdCalling() {
       // Get the next lead ID
       const nextLeadId = selectedLeads[nextIndex];
       
+      // Skip leads without phone numbers
+      if (!hasValidPhone(nextLeadId)) {
+        console.warn(`Skipping lead ${nextLeadId} due to missing phone number`);
+        // Recursively try the next lead
+        setCurrentBatchIndex(nextIndex);
+        setLoading(false);
+        callNextLead();
+        return;
+      }
+      
       // Find the lead
       const lead = leads.find(l => l.id === nextLeadId);
       
@@ -250,13 +288,9 @@ export default function ColdCalling() {
         throw new Error('Next lead not found');
       }
       
-      if (!lead.phone) {
-        throw new Error('Lead has no phone number. Skipping to next lead.');
-      }
-      
-      // Make the call
+      // Make the call (we already verified phone exists)
       const response = await placeCall(
-        lead.phone,
+        lead.mobile_phone1!,
         lead.id,
         callScript
       );
@@ -278,6 +312,17 @@ export default function ColdCalling() {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Update phone number when selecting a lead
+  const handleLeadSelection = (leadId: string) => {
+    setSelectedLead(leadId);
+    const lead = leads.find(l => l.id === leadId);
+    if (lead && lead.mobile_phone1) {
+      setPhoneNumber(lead.mobile_phone1);
+    } else {
+      setPhoneNumber(''); // Clear phone if lead has no phone
     }
   };
 
@@ -400,8 +445,7 @@ export default function ColdCalling() {
                       if (activeTab === 'batch') {
                         toggleLeadSelection(lead.id);
                       } else {
-                        setSelectedLead(lead.id);
-                        setPhoneNumber(lead.phone || '');
+                        handleLeadSelection(lead.id);
                       }
                     }}
                   >
@@ -409,7 +453,11 @@ export default function ColdCalling() {
                       <div>
                         <div className="font-medium">{lead.first_name} {lead.last_name}</div>
                         <div className="text-sm text-gray-500">{lead.company_name}</div>
-                        <div className="text-sm text-gray-500">{lead.phone}</div>
+                        {lead.mobile_phone1 ? (
+                          <div className="text-sm text-gray-500">{lead.mobile_phone1}</div>
+                        ) : (
+                          <div className="text-sm text-red-500 italic">No phone number</div>
+                        )}
                       </div>
                       {activeTab === 'batch' && (
                         <div className="flex items-center">
@@ -492,17 +540,65 @@ export default function ColdCalling() {
                       <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
                         Phone Number
                       </label>
-                      <input
-                        type="tel"
-                        id="phone"
-                        className="w-full p-2 border rounded"
-                        value={phoneNumber}
-                        onChange={(e) => setPhoneNumber(e.target.value)}
-                        placeholder="+1234567890"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Enter phone number in international format (e.g., +1234567890)
-                      </p>
+                      {(() => {
+                        const lead = leads.find(l => l.id === selectedLead);
+                        if (!lead) return null;
+                        
+                        return (
+                          <div className="space-y-2">
+                            {lead.mobile_phone1 && (
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="radio"
+                                  id="phone1"
+                                  name="phone"
+                                  value={lead.mobile_phone1}
+                                  checked={phoneNumber === lead.mobile_phone1}
+                                  onChange={(e) => setPhoneNumber(e.target.value)}
+                                  className="text-blue-600"
+                                />
+                                <label htmlFor="phone1" className="text-sm">
+                                  Primary: {lead.mobile_phone1}
+                                </label>
+                              </div>
+                            )}
+                            {lead.mobile_phone2 && (
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="radio"
+                                  id="phone2"
+                                  name="phone"
+                                  value={lead.mobile_phone2}
+                                  checked={phoneNumber === lead.mobile_phone2}
+                                  onChange={(e) => setPhoneNumber(e.target.value)}
+                                  className="text-blue-600"
+                                />
+                                <label htmlFor="phone2" className="text-sm">
+                                  Secondary: {lead.mobile_phone2}
+                                </label>
+                              </div>
+                            )}
+                            <div className="mt-2">
+                              <input
+                                type="tel"
+                                id="customPhone"
+                                className={`w-full p-2 border rounded ${!phoneNumber ? 'border-red-300 bg-red-50' : ''}`}
+                                value={phoneNumber}
+                                onChange={(e) => setPhoneNumber(e.target.value)}
+                                placeholder="+1234567890"
+                              />
+                              <p className="text-xs text-gray-500 mt-1">
+                                Enter phone number in international format (e.g., +1234567890)
+                              </p>
+                              {!phoneNumber && (
+                                <p className="text-sm text-red-500 mt-1">
+                                  This lead does not have a phone number. Please enter one manually to make a call.
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                     
                     <button
@@ -550,6 +646,27 @@ export default function ColdCalling() {
                 
                 <div className="mb-4">
                   <p>Select multiple leads from the list to include in your batch call.</p>
+                  
+                  {/* Count and show warning for leads without phone numbers */}
+                  {selectedLeads.length > 0 && (() => {
+                    const leadsWithoutPhone = selectedLeads.filter(id => {
+                      const lead = leads.find(l => l.id === id);
+                      return !lead?.mobile_phone1;
+                    });
+                    
+                    if (leadsWithoutPhone.length > 0) {
+                      return (
+                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                          <p className="text-sm text-yellow-700">
+                            <span className="font-medium">Warning:</span> {leadsWithoutPhone.length} of {selectedLeads.length} selected 
+                            {leadsWithoutPhone.length === 1 ? ' lead does ' : ' leads do '} 
+                            not have a phone number and will be skipped.
+                          </p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                   
                   {batchCallInProgress && (
                     <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
