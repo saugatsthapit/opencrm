@@ -109,14 +109,34 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     }
 
     // Format greeting with variable substitution
-    let greeting = callScript.greeting || `Hello, I'm calling about our CRM software that can help improve your team's productivity.`;
+    let greeting = callScript.greeting || `Hello!`;
     
-    // Replace variables in the greeting
-    const leadName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim();
-    greeting = greeting.replace(/{{firstName}}/g, lead.first_name || '')
-                      .replace(/{{lastName}}/g, lead.last_name || '')
-                      .replace(/{{name}}/g, leadName)
-                      .replace(/{{company}}/g, lead.company_name || 'your company');
+    // Helper function to replace variables in text
+    const replaceVariables = (text, lead) => {
+      if (!text) return '';
+      
+      const leadName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim();
+      const industry = lead.company_industry || lead.industry || 'your industry';
+      
+      return text
+        .replace(/{{firstName}}/g, lead.first_name || 'there')
+        .replace(/{{lastName}}/g, lead.last_name || '')
+        .replace(/{{name}}/g, leadName || 'there')
+        .replace(/{{company}}/g, lead.company_name || 'your company')
+        .replace(/{{email}}/g, lead.email || 'your email')
+        .replace(/{{title}}/g, lead.title || 'your team')
+        .replace(/{{phone}}/g, lead.mobile_phone1 || lead.phone || 'your phone')
+        .replace(/{{secondaryPhone}}/g, lead.mobile_phone2 || '')
+        .replace(/{{industry}}/g, industry)
+        .replace(/{{location}}/g, lead.location || 'your location');
+    };
+
+    // Replace variables in all script parts
+    greeting = replaceVariables(greeting, lead);
+    const introduction = replaceVariables(callScript.introduction || '', lead);
+    const talkingPoints = (callScript.talking_points || []).map(point => replaceVariables(point, lead));
+    const questions = (callScript.questions || []).map(question => replaceVariables(question, lead));
+    const closing = replaceVariables(callScript.closing || '', lead);
 
     // Webhook configuration for receiving call events
     const webhookUrl = getPublicWebhookUrl();
@@ -134,7 +154,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
         // Construct the payload according to VAPI API documentation
         const callPayload = {
           // Name of the call for reference
-          name: `Cold Call to ${leadName || phone_number}`,
+          name: `Cold Call to ${lead.first_name || lead.last_name || phone_number}`,
           
           // Metadata for tracking purposes - stored at call level
           metadata: {
@@ -153,7 +173,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
           // Customer to call
           customer: {
             number: phone_number.startsWith('+') ? phone_number : `+${phone_number}`,
-            name: leadName || 'Lead'
+            name: lead.first_name || lead.last_name || 'Lead'
           },
           
           // Only override the essential parts, not the voice settings which are already set on the assistant
@@ -175,23 +195,28 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
               messages: [
                 {
                   role: "system",
-                  content: `You are a professional cold caller for a CRM software company. 
-You're calling ${leadName || 'a potential customer'} at ${lead.company_name || 'a company'}.
-Here's your script:
-- Introduction: ${callScript.introduction || ''}
-- Talking Points: ${callScript.talking_points ? callScript.talking_points.join(', ') : ''}
-- Questions to Ask: ${callScript.questions ? callScript.questions.join(', ') : ''}
-- Closing Message: ${callScript.closing || ''}
+                  content: `You are a professional cold caller. 
+You're calling ${lead.first_name || lead.last_name || 'a potential customer'} at ${lead.company_name || 'a company'}.
+
+Your call should follow this personalized script:
+
+1. Greeting: "${greeting}"
+2. Introduction: "${introduction}"
+3. Talking Points:
+${talkingPoints.map(point => `   - ${point}`).join('\n')}
+4. Questions to Ask:
+${questions.map(question => `   - ${question}`).join('\n')}
+5. Closing: "${closing}"
 
 Remember to:
 1. Be professional and courteous
-2. Listen carefully to responses
-3. Address any concerns
+2. Listen carefully to responses and adapt accordingly
+3. Address any concerns the customer raises
 4. Avoid being too pushy
 5. Collect relevant information about their needs
 6. Clearly explain the next steps if they're interested
 
-First, introduce yourself and the purpose of your call. Then, proceed with the conversation.`
+First, introduce yourself with the greeting above, then proceed with the conversation naturally.`
                 }
               ]
             }

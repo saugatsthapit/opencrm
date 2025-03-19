@@ -244,18 +244,20 @@ export const getCallHistoryFromSupabase = async (leadId: string, limit = 10) => 
  */
 export const defaultCallScript = {
   greeting: "Hello, this is {{firstName}} from {{company}}.",
-  introduction: "I'm calling today about our solution that helps businesses like {{company}} improve their sales automation.",
+  introduction: "I'm calling today to discuss how our solution can help businesses like {{company}} improve their sales processes and customer relationships.",
   talking_points: [
     "Our platform helps businesses increase revenue by 30% on average.",
-    "We specialize in helping companies in the {{industry}} industry.",
-    "Our solution integrates with your existing tools and workflows."
+    "We've worked with several companies in the {{industry}} industry with great success.",
+    "Our solution can integrate with your existing tools to provide a seamless experience.",
+    "Companies like yours have seen significant improvements in customer retention."
   ],
   questions: [
-    "Is now a good time to talk about how we could help your business?",
-    "What challenges are you currently facing with your sales process?",
-    "Would you be interested in learning more about our solution?"
+    "Is now a good time to talk about how we could help {{company}}?",
+    "What challenges is {{company}} currently facing with your sales process?",
+    "How is your team currently handling customer relationships?",
+    "What tools are you using now for your CRM needs?"
   ],
-  closing: "Thank you for your time today. I'd be happy to schedule a follow-up call to discuss this further.",
+  closing: "Thank you for your time, {{name}}. I'd be happy to schedule a follow-up meeting to discuss this further and show you a demo of our platform.",
   ai_model: "gpt-4",
   voice: "shimmer" // Using VAPI's voice
 }; 

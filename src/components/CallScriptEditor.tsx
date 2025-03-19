@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Trash2, PlusCircle, Phone } from 'lucide-react';
+import { Trash2, PlusCircle, Phone, HelpCircle, Info } from 'lucide-react';
 
 // Available AI voices for VAPI
 const VOICE_OPTIONS = [
@@ -16,10 +16,60 @@ const AI_MODEL_OPTIONS = [
   { value: 'gpt-3.5-turbo', label: 'GPT-3.5 Turbo (Faster)' },
 ];
 
+// Available variables for scripting
+const AVAILABLE_VARIABLES = [
+  { variable: '{{firstName}}', description: 'Lead\'s first name' },
+  { variable: '{{lastName}}', description: 'Lead\'s last name' },
+  { variable: '{{name}}', description: 'Lead\'s full name' },
+  { variable: '{{email}}', description: 'Lead\'s email address' },
+  { variable: '{{company}}', description: 'Lead\'s company name' },
+  { variable: '{{title}}', description: 'Lead\'s job title' },
+  { variable: '{{phone}}', description: 'Lead\'s primary phone number' },
+  { variable: '{{secondaryPhone}}', description: 'Lead\'s secondary phone number' },
+  { variable: '{{industry}}', description: 'Lead\'s company industry' },
+  { variable: '{{location}}', description: 'Lead\'s location' },
+];
+
 type CallScriptEditorProps = {
   value: any;
   onChange: (value: any) => void;
   onTestCall?: (phoneNumber: string) => void;
+};
+
+const VariablesHelper = () => {
+  const [showVariables, setShowVariables] = useState(false);
+  
+  return (
+    <div className="mb-4">
+      <div 
+        className="flex items-center text-sm text-blue-600 cursor-pointer mb-2"
+        onClick={() => setShowVariables(!showVariables)}
+      >
+        <Info className="w-4 h-4 mr-1" />
+        <span className="underline">{showVariables ? 'Hide' : 'Show'} available variables</span>
+      </div>
+      
+      {showVariables && (
+        <div className="bg-blue-50 p-3 rounded-md border border-blue-200 mb-4">
+          <p className="text-sm mb-2">
+            You can use these variables in your script to personalize the conversation:
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {AVAILABLE_VARIABLES.map((item, index) => (
+              <div key={index} className="text-sm">
+                <code className="bg-white px-1 py-0.5 rounded text-blue-700">{item.variable}</code>
+                <span className="text-gray-600 ml-2">{item.description}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 mt-3">
+            These variables will be replaced with the lead's actual information when the call is placed.
+            If the information is not available, the variable will be replaced with an appropriate default.
+          </p>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default function CallScriptEditor({ value, onChange, onTestCall }: CallScriptEditorProps) {
@@ -132,12 +182,14 @@ export default function CallScriptEditor({ value, onChange, onTestCall }: CallSc
       <div className="border-t border-gray-200 pt-4">
         <h3 className="text-lg font-medium mb-4">Call Script Content</h3>
         
+        <VariablesHelper />
+        
         <div className="mb-4">
           <label className="block text-sm font-medium mb-1">First Greeting</label>
           <input
             type="text"
             className="w-full rounded-md border-gray-300"
-            placeholder="Hello, this is [Name] from [Company]..."
+            placeholder="Hello, this is {{firstName}} from {{company}}..."
             value={value.greeting || ''}
             onChange={(e) => handleChange('greeting', e.target.value)}
           />
