@@ -133,7 +133,7 @@ const makeVapiCall = async (callPayload) => {
  * Place an outbound call using VAPI (Voice AI API)
  * @param {string} phone_number - The phone number to call
  * @param {object} lead - The lead data for the call
- * @param {object} callScript - The call script configuration
+ * @param {object} callScript - The call script configuration (not used - using VAPI assistant config)
  * @param {string} leadSequenceId - The ID of the lead sequence
  * @param {string} stepId - The ID of the step in the sequence
  * @returns {object} - The call tracking information
@@ -150,8 +150,8 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     const formattedPhoneNumber = formatPhoneNumber(phone_number);
     console.log(`Formatted phone number: ${formattedPhoneNumber}`);
     
-    if (!VAPI_PUBLIC_KEY) {
-      throw new Error('VAPI API key is required for cold calling. Please set VITE_VAPI_API_KEY in your .env file.');
+    if (!VAPI_PRIVATE_KEY) {
+      throw new Error('VAPI Private key is required for cold calling. Please set VITE_VAPI_PRIVATE_KEY in your .env file.');
     }
 
     // Create tracking record
@@ -207,40 +207,6 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       };
       console.log('Using local tracking as fallback:', tracking);
     }
-
-    // Format greeting with variable substitution
-    let greeting = callScript.greeting || `Hello!`;
-    
-    // Helper function to replace variables in text
-    const replaceVariables = (text, lead) => {
-      if (!text) return '';
-      
-      const leadName = `${lead.first_name || ''} ${lead.last_name || ''}`.trim();
-      const industry = lead.company_industry || lead.industry || 'your industry';
-      
-      return text
-        .replace(/{{firstName}}/g, lead.first_name || 'there')
-        .replace(/{{lastName}}/g, lead.last_name || '')
-        .replace(/{{name}}/g, leadName || 'there')
-        .replace(/{{company}}/g, lead.company_name || 'your company')
-        .replace(/{{email}}/g, lead.email || 'your email')
-        .replace(/{{title}}/g, lead.title || 'your team')
-        .replace(/{{phone}}/g, lead.mobile_phone1 || lead.phone || 'your phone')
-        .replace(/{{secondaryPhone}}/g, lead.mobile_phone2 || '')
-        .replace(/{{industry}}/g, industry)
-        .replace(/{{location}}/g, lead.location || 'your location');
-    };
-
-    // Replace variables in all script parts
-    greeting = replaceVariables(greeting, lead);
-    const introduction = replaceVariables(callScript.introduction || '', lead);
-    const talkingPoints = (callScript.talking_points || []).map(point => replaceVariables(point, lead));
-    const questions = (callScript.questions || []).map(question => replaceVariables(question, lead));
-    const closing = replaceVariables(callScript.closing || '', lead);
-
-    // Webhook configuration for receiving call events
-    const webhookUrl = getPublicWebhookUrl();
-    console.log(`Webhook URL for VAPI events: ${webhookUrl}`);
     
     // Check if real calls are enabled (either in production or explicitly enabled)
     const enableRealCalls = process.env.NODE_ENV === 'production' || process.env.VITE_ENABLE_REAL_CALLS === 'true';
@@ -251,108 +217,21 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       try {
         console.log('Making REAL call to', formattedPhoneNumber);
         
-        // Log full payload for debugging - redact sensitive parts
-        const debugPayload = {
-          name: `Cold Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
-          phoneNumberId: VAPI_PHONE_NUMBER_ID,
-          assistantId: VAPI_ASSISTANT_ID,
-          customer: {
-            number: formattedPhoneNumber,
-            name: lead.first_name || lead.last_name || 'Lead'
-          },
-          assistantOverrides: {
-            firstMessage: greeting,
-            // Redact some parts for log clarity
-            model: {
-              provider: "openai",
-              model: callScript.ai_model || "gpt-4",
-            }
-          }
-        };
-        
-        console.log('VAPI call debug payload:', JSON.stringify(debugPayload, null, 2));
-        console.log('Using VAPI phone number ID:', VAPI_PHONE_NUMBER_ID);
-        console.log('Using VAPI assistant ID:', VAPI_ASSISTANT_ID);
-        
-        // Get webhook URL
-        const webhookUrl = getPublicWebhookUrl();
-        console.log(`Webhook URL for VAPI events: ${webhookUrl}`);
-        
-        // Check if it's a valid https or wss URL - VAPI requires this
-        const isValidWebhookUrl = webhookUrl.startsWith('https://') || webhookUrl.startsWith('wss://');
-        console.log(`Is webhook URL valid for VAPI: ${isValidWebhookUrl}`);
-        
-        // Construct the payload according to VAPI API documentation
+        // Create minimal payload using VAPI's assistant configuration
         const callPayload = {
           // Name of the call for reference
-          name: `Cold Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
-          
-          // Metadata for tracking purposes - stored at call level
-          metadata: {
-            lead_id: lead.id,
-            tracking_id: tracking.tracking_id,
-            lead_sequence_id: leadSequenceId || null,
-            step_id: stepId || null
-          },
+          name: `Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
           
           // Use existing phone number ID
           phoneNumberId: VAPI_PHONE_NUMBER_ID,
           
-          // Use existing assistant ID
+          // Use existing assistant ID (which has the call script configured)
           assistantId: VAPI_ASSISTANT_ID,
           
-          // Customer to call
+          // Only required customer fields
           customer: {
             number: formattedPhoneNumber,
             name: lead.first_name || lead.last_name || 'Lead'
-          },
-          
-          // Only override the essential parts, not the voice settings which are already set on the assistant
-          assistantOverrides: {
-            // First message and mode
-            firstMessage: greeting,
-            
-            // Server webhook configuration - only add if we have a valid HTTPS URL
-            ...(isValidWebhookUrl ? {
-              serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
-              server: {
-                url: webhookUrl,
-                timeoutSeconds: 30
-              }
-            } : {}),
-            
-            // Model configuration with system message
-            model: {
-              provider: "openai",
-              model: callScript.ai_model || "gpt-4",
-              messages: [
-                {
-                  role: "system",
-                  content: `You are a professional cold caller. 
-You're calling ${lead.first_name || lead.last_name || 'a potential customer'} at ${lead.company_name || 'a company'}.
-
-Your call should follow this personalized script:
-
-1. Greeting: "${greeting}"
-2. Introduction: "${introduction}"
-3. Talking Points:
-${talkingPoints.map(point => `   - ${point}`).join('\n')}
-4. Questions to Ask:
-${questions.map(question => `   - ${question}`).join('\n')}
-5. Closing: "${closing}"
-
-Remember to:
-1. Be professional and courteous
-2. Listen carefully to responses and adapt accordingly
-3. Address any concerns the customer raises
-4. Avoid being too pushy
-5. Collect relevant information about their needs
-6. Clearly explain the next steps if they're interested
-
-First, introduce yourself with the greeting above, then proceed with the conversation naturally.`
-                }
-              ]
-            }
           }
         };
         
@@ -1097,41 +976,21 @@ const testVapiConfiguration = async (phoneNumber) => {
     console.log('Testing VAPI configuration with:');
     console.log('- Private key (first 8 chars):', VAPI_PRIVATE_KEY.substring(0, 8) + '...');
     console.log('- Public key (first 8 chars):', VAPI_PUBLIC_KEY.substring(0, 8) + '...');
-    console.log('- Phone Number ID:', VAPI_PHONE_NUMBER_ID);
     console.log('- Assistant ID:', VAPI_ASSISTANT_ID);
+    console.log('- Phone Number ID:', VAPI_PHONE_NUMBER_ID);
     
-    // Get webhook URL 
-    const webhookUrl = getPublicWebhookUrl();
-    console.log('- Webhook URL:', webhookUrl);
-    const isValidWebhookUrl = webhookUrl.startsWith('https://') || webhookUrl.startsWith('wss://');
-    console.log('- Is webhook URL valid:', isValidWebhookUrl);
-    
-    // Create a simple payload
+    // Create minimal payload for the test call
     const simplePayload = {
-      name: 'Test Call',
+      name: "VAPI Test Call",
       phoneNumberId: VAPI_PHONE_NUMBER_ID,
       assistantId: VAPI_ASSISTANT_ID,
       customer: {
         number: formattedPhoneNumber,
-        name: 'Test User'
-      },
-      metadata: {
-        test: true,
-        tracking_id: `test-${Date.now()}`
-      },
-      assistantOverrides: {
-        firstMessage: 'Hello, this is a test call to verify our VAPI configuration. This call will end in a few seconds.',
-        ...(isValidWebhookUrl ? {
-          serverMessages: ["status-update"],
-          server: {
-            url: webhookUrl,
-            timeoutSeconds: 30
-          }
-        } : {})
+        name: "Test User"
       }
     };
     
-    console.log('Attempting simplified test call to VAPI...');
+    console.log('Call payload:', JSON.stringify(simplePayload, null, 2));
     
     try {
       // Make the call using our helper function
