@@ -559,4 +559,33 @@ function processScript(script, leadData) {
   return processedScript;
 }
 
+// Test VAPI configuration
+router.post('/test-vapi', async (req, res) => {
+  try {
+    // Get phone number from request or use a default
+    const { phone_number } = req.body;
+    
+    if (!phone_number) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number is required for testing'
+      });
+    }
+    
+    console.log(`Testing VAPI configuration with phone number: ${phone_number}`);
+    
+    // Call the test function
+    const result = await callService.testVapiConfiguration(phone_number);
+    
+    // Return results
+    return res.json(result);
+  } catch (error) {
+    console.error('Error testing VAPI configuration:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 module.exports = router; 

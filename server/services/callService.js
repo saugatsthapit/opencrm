@@ -6,13 +6,22 @@ const fetch = require('node-fetch');
 
 dotenv.config();
 
-const VAPI_API_KEY = process.env.VITE_VAPI_API_KEY;
+// Get the VAPI API key from the environment, with more explicit fallback/validation
+const VAPI_PUBLIC_KEY = process.env.VITE_VAPI_API_KEY || '0e0037b2-4158-480e-b6c3-969e07fa5d17'; // Public key for client-side
+const VAPI_PRIVATE_KEY = process.env.VITE_VAPI_PRIVATE_KEY || '8cb1acea-c543-4f99-b0ac-0b7dba16ca13'; // Private key for server-side
 const VAPI_BASE_URL = 'https://api.vapi.ai/call';
-const PHONE_SERVICE_API_KEY = process.env.VITE_PHONE_SERVICE_API_KEY;
+const PHONE_SERVICE_API_KEY = process.env.VITE_PHONE_SERVICE_API_KEY || VAPI_PUBLIC_KEY; // Fallback to VAPI key
+
+// Debug environment variables
+console.log('Current env:', process.env.NODE_ENV);
+console.log('VAPI public key available:', !!VAPI_PUBLIC_KEY);
+console.log('VAPI public key starts with:', VAPI_PUBLIC_KEY ? VAPI_PUBLIC_KEY.substring(0, 8) + '...' : 'N/A');
+console.log('VAPI private key available:', !!VAPI_PRIVATE_KEY);
+console.log('VAPI private key starts with:', VAPI_PRIVATE_KEY ? VAPI_PRIVATE_KEY.substring(0, 8) + '...' : 'N/A');
 
 // VAPI configuration for outbound calls
-const VAPI_ASSISTANT_ID = process.env.VITE_VAPI_ASSISTANT_ID;
-const VAPI_PHONE_NUMBER_ID = process.env.VITE_VAPI_PHONE_NUMBER_ID;
+const VAPI_ASSISTANT_ID = process.env.VITE_VAPI_ASSISTANT_ID || '7d38bf23-7cc9-4a85-b8c1-a00ac9c20a16';
+const VAPI_PHONE_NUMBER_ID = process.env.VITE_VAPI_PHONE_NUMBER_ID || 'ae2a1cd1-e8e7-4afd-a57e-99aef8d9e54e';
 
 // Initialize Twilio client with your credentials
 const twilioClient = twilio(
@@ -21,8 +30,11 @@ const twilioClient = twilio(
 );
 const TWILIO_PHONE_NUMBER = process.env.VITE_TWILIO_PHONE_NUMBER;
 
-// Initialize VAPI client with API key
-const vapiClient = new VapiClient({ apiKey: VAPI_API_KEY });
+// Initialize VAPI client with the PRIVATE key
+const vapiClient = new VapiClient({ 
+  apiKey: VAPI_PRIVATE_KEY.trim() // Use private key for server SDK
+});
+console.log('VAPI client initialized with private key');
 
 // Track call statuses in memory for quick access
 const callStatusMap = new Map();
@@ -55,8 +67,66 @@ const formatPhoneNumber = (phoneNumber) => {
 
 // Add this function to get a proper webhook URL that works with external services
 const getPublicWebhookUrl = () => {
+  // Check for a public webhook URL in the environment
+  const publicWebhookUrl = process.env.VAPI_WEBHOOK_URL;
+  
+  // If we have a public URL configured (like ngrok), use it
+  if (publicWebhookUrl) {
+    return publicWebhookUrl;
+  }
+  
+  // For development, use a public webhook URL service if available
+  const ngrokUrl = process.env.NGROK_URL;
+  if (ngrokUrl) {
+    return `${ngrokUrl}/api/v1/calls/vapi-webhook`;
+  }
+  
+  // Default fallback - note this won't work with VAPI in production
+  // as they require HTTPS URLs for webhooks
   const baseUrl = process.env.SERVER_URL || 'http://localhost:8001';
+  console.warn('WARNING: Using localhost URL for webhooks. This will NOT work with VAPI in production.');
+  console.warn('Please set VAPI_WEBHOOK_URL or NGROK_URL in your .env file.');
+  
   return `${baseUrl}/api/v1/calls/vapi-webhook`;
+};
+
+// Helper function to make VAPI calls (handles SDK and direct API approaches)
+const makeVapiCall = async (callPayload) => {
+  try {
+    // Try SDK first
+    console.log('Attempting to create VAPI call with SDK...');
+    const result = await vapiClient.calls.create(callPayload);
+    console.log('VAPI SDK call successful:', result);
+    return result;
+  } catch (sdkError) {
+    console.error('VAPI SDK call error:', sdkError);
+    
+    // Try direct API if SDK fails
+    console.log('Falling back to direct API call...');
+    try {
+      const response = await fetch('https://api.vapi.ai/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${VAPI_PRIVATE_KEY}`,
+        },
+        body: JSON.stringify(callPayload)
+      });
+      
+      const responseData = await response.json();
+      
+      if (!response.ok) {
+        console.error('Direct API call failed:', responseData);
+        throw new Error(`Direct API call failed: ${response.status} - ${JSON.stringify(responseData)}`);
+      }
+      
+      console.log('Direct API call succeeded:', responseData);
+      return responseData;
+    } catch (directError) {
+      console.error('Direct API call error:', directError);
+      throw directError;
+    }
+  }
 };
 
 /**
@@ -80,7 +150,7 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
     const formattedPhoneNumber = formatPhoneNumber(phone_number);
     console.log(`Formatted phone number: ${formattedPhoneNumber}`);
     
-    if (!VAPI_API_KEY) {
+    if (!VAPI_PUBLIC_KEY) {
       throw new Error('VAPI API key is required for cold calling. Please set VITE_VAPI_API_KEY in your .env file.');
     }
 
@@ -181,6 +251,37 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
       try {
         console.log('Making REAL call to', formattedPhoneNumber);
         
+        // Log full payload for debugging - redact sensitive parts
+        const debugPayload = {
+          name: `Cold Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
+          phoneNumberId: VAPI_PHONE_NUMBER_ID,
+          assistantId: VAPI_ASSISTANT_ID,
+          customer: {
+            number: formattedPhoneNumber,
+            name: lead.first_name || lead.last_name || 'Lead'
+          },
+          assistantOverrides: {
+            firstMessage: greeting,
+            // Redact some parts for log clarity
+            model: {
+              provider: "openai",
+              model: callScript.ai_model || "gpt-4",
+            }
+          }
+        };
+        
+        console.log('VAPI call debug payload:', JSON.stringify(debugPayload, null, 2));
+        console.log('Using VAPI phone number ID:', VAPI_PHONE_NUMBER_ID);
+        console.log('Using VAPI assistant ID:', VAPI_ASSISTANT_ID);
+        
+        // Get webhook URL
+        const webhookUrl = getPublicWebhookUrl();
+        console.log(`Webhook URL for VAPI events: ${webhookUrl}`);
+        
+        // Check if it's a valid https or wss URL - VAPI requires this
+        const isValidWebhookUrl = webhookUrl.startsWith('https://') || webhookUrl.startsWith('wss://');
+        console.log(`Is webhook URL valid for VAPI: ${isValidWebhookUrl}`);
+        
         // Construct the payload according to VAPI API documentation
         const callPayload = {
           // Name of the call for reference
@@ -211,12 +312,14 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
             // First message and mode
             firstMessage: greeting,
             
-            // Server webhook configuration
-            serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
-            server: {
-              url: webhookUrl,
-              timeoutSeconds: 30
-            },
+            // Server webhook configuration - only add if we have a valid HTTPS URL
+            ...(isValidWebhookUrl ? {
+              serverMessages: ["end-of-call-report", "conversation-update", "status-update"],
+              server: {
+                url: webhookUrl,
+                timeoutSeconds: 30
+              }
+            } : {}),
             
             // Model configuration with system message
             model: {
@@ -253,12 +356,17 @@ First, introduce yourself with the greeting above, then proceed with the convers
           }
         };
         
-        console.log('VAPI call payload:', JSON.stringify(callPayload, null, 2));
+        // Log just the SDK call attempt
+        console.log('Attempting to create VAPI call...');
         
-        // Make the call using VAPI SDK
-        callData = await vapiClient.calls.create(callPayload);
-        
-        console.log('VAPI call successfully initiated:', callData);
+        try {
+          // Make the call using the helper function
+          callData = await makeVapiCall(callPayload);
+          console.log('VAPI call successfully initiated:', callData);
+        } catch (vapiError) {
+          console.error('VAPI call error:', vapiError);
+          throw vapiError;
+        }
       } catch (vapiError) {
         console.error('VAPI call error:', vapiError);
         // Fall back to simulation if VAPI call fails
@@ -366,7 +474,7 @@ const getTwiMlForTracking = async (trackingId) => {
  */
 const createVapiBridge = async (trackingId) => {
   try {
-    if (!VAPI_API_KEY) {
+    if (!VAPI_PUBLIC_KEY) {
       console.error('VAPI API key not configured');
       return {
         error: 'VAPI API key not configured',
@@ -420,7 +528,7 @@ const createVapiBridge = async (trackingId) => {
         // Setup the connect and stream for VAPI
         const connect = response.connect();
         // Make sure the URL is correctly formatted - this is key
-        const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}`;
+        const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_PRIVATE_KEY}`;
         
         console.log(`Using stream URL: ${streamUrl}`);
         
@@ -534,7 +642,7 @@ const createVapiBridge = async (trackingId) => {
     const connect = response.connect();
     
     // This is the correct format for the VAPI stream URL - without tracking ID in path
-    const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_API_KEY}`;
+    const streamUrl = `wss://api.vapi.ai/twilio/stream/${VAPI_PRIVATE_KEY}`;
     console.log(`Using stream URL: ${streamUrl}`);
     
     const stream = connect.stream({
@@ -975,6 +1083,75 @@ const getCallStatus = async (callId) => {
   }
 };
 
+/**
+ * Test VAPI configuration with a simpler call
+ * @param {string} phoneNumber - Phone number to test call
+ * @returns {object} - Test result
+ */
+const testVapiConfiguration = async (phoneNumber) => {
+  try {
+    // Format the phone number
+    const formattedPhoneNumber = formatPhoneNumber(phoneNumber);
+    
+    // Log the keys being used
+    console.log('Testing VAPI configuration with:');
+    console.log('- Private key (first 8 chars):', VAPI_PRIVATE_KEY.substring(0, 8) + '...');
+    console.log('- Public key (first 8 chars):', VAPI_PUBLIC_KEY.substring(0, 8) + '...');
+    console.log('- Phone Number ID:', VAPI_PHONE_NUMBER_ID);
+    console.log('- Assistant ID:', VAPI_ASSISTANT_ID);
+    
+    // Get webhook URL 
+    const webhookUrl = getPublicWebhookUrl();
+    console.log('- Webhook URL:', webhookUrl);
+    const isValidWebhookUrl = webhookUrl.startsWith('https://') || webhookUrl.startsWith('wss://');
+    console.log('- Is webhook URL valid:', isValidWebhookUrl);
+    
+    // Create a simple payload
+    const simplePayload = {
+      name: 'Test Call',
+      phoneNumberId: VAPI_PHONE_NUMBER_ID,
+      assistantId: VAPI_ASSISTANT_ID,
+      customer: {
+        number: formattedPhoneNumber,
+        name: 'Test User'
+      },
+      metadata: {
+        test: true,
+        tracking_id: `test-${Date.now()}`
+      },
+      assistantOverrides: {
+        firstMessage: 'Hello, this is a test call to verify our VAPI configuration. This call will end in a few seconds.',
+        ...(isValidWebhookUrl ? {
+          serverMessages: ["status-update"],
+          server: {
+            url: webhookUrl,
+            timeoutSeconds: 30
+          }
+        } : {})
+      }
+    };
+    
+    console.log('Attempting simplified test call to VAPI...');
+    
+    try {
+      // Make the call using our helper function
+      const result = await makeVapiCall(simplePayload);
+      console.log('VAPI test call successful:', result);
+      return { success: true, call_id: result.id, message: 'Test call successful!' };
+    } catch (error) {
+      console.error('VAPI test call failed:', error);
+      return { 
+        success: false, 
+        error: error.message || JSON.stringify(error),
+        details: error
+      };
+    }
+  } catch (error) {
+    console.error('Error testing VAPI configuration:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 // Export all functions using CommonJS syntax
 module.exports = {
   placeCall,
@@ -983,5 +1160,8 @@ module.exports = {
   handleCallStatus,
   handleRecording,
   handleVapiWebhook,
-  getCallStatus
+  getCallStatus,
+  testVapiConfiguration,
+  VAPI_PUBLIC_KEY,
+  VAPI_PRIVATE_KEY
 }; 
