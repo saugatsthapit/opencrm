@@ -142,7 +142,26 @@ export default function ColdCalling() {
 
       setCallResult(response);
       
-      // Mark this lead as called
+      // Mark this lead as called using our new endpoint
+      try {
+        await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            callDetails: {
+              timestamp: new Date().toISOString(),
+              notes: `Call placed to ${formattedNumber}`,
+              success: true
+            }
+          })
+        });
+      } catch (err) {
+        console.error('Error marking lead as called:', err);
+      }
+      
+      // Mark this lead as called in the UI
       setLeads(prevLeads => 
         prevLeads.map(l => 
           l.id === selectedLead ? { ...l, called: true } : l
@@ -159,6 +178,26 @@ export default function ColdCalling() {
         setError('Network connection error: Unable to reach the API server. Make sure the server is running at http://localhost:8002 and the Vite proxy is configured correctly.');
       } else {
         setError(err.message);
+      }
+      
+      // Mark the call as failed in our tracking
+      try {
+        await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            callDetails: {
+              timestamp: new Date().toISOString(),
+              notes: `Failed to place call: ${err.message}`,
+              success: false,
+              error_message: err.message
+            }
+          })
+        });
+      } catch (markErr) {
+        console.error('Error marking lead call as failed:', markErr);
       }
     } finally {
       setLoading(false);
@@ -249,29 +288,70 @@ export default function ColdCalling() {
         // Find the lead that was called and mark it
         const firstCalledLead = data.data.leads.find((lead: any) => !lead.queued && lead.success);
         if (firstCalledLead) {
-          setLeads(prevLeads => 
-            prevLeads.map(l => 
-              l.id === firstCalledLead.lead_id ? { ...l, called: true } : l
-            )
-          );
-          
-          // Store call result
-          setBatchCallResults([firstCalledLead.call_result]);
-          
-          // Set current call result
-          setCallResult(firstCalledLead.call_result);
+          // Mark the lead as called using our new endpoint
+          try {
+            await fetch(`/api/v1/calls/lead/${firstCalledLead.lead_id}/mark-called`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                callDetails: {
+                  timestamp: new Date().toISOString(),
+                  notes: `Batch call placed to lead`,
+                  success: true
+                }
+              })
+            });
+          } catch (err) {
+            console.error('Error marking lead as called:', err);
+          }
         }
       }
       
-      // Display any errors for specific leads
-      data.data.leads.forEach((leadResult: any) => {
-        if (!leadResult.success) {
-          console.error(`Error with lead ${leadResult.lead_id}: ${leadResult.message}`);
-        }
-      });
+      // Store the batch results
+      setBatchCallResults(data.data.leads.map((lead: any) => ({
+        lead_id: lead.lead_id,
+        queued: lead.queued,
+        success: lead.success,
+        error: lead.error
+      })));
       
+      // Mark all queued leads as called with queued status
+      for (const lead of data.data.leads) {
+        if (lead.queued) {
+          try {
+            await fetch(`/api/v1/calls/lead/${lead.lead_id}/mark-called`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                callDetails: {
+                  timestamp: new Date().toISOString(),
+                  notes: 'Queued in batch call',
+                  success: true,
+                  status: 'queued'
+                }
+              })
+            });
+          } catch (err) {
+            console.error(`Error marking lead ${lead.lead_id} as queued:`, err);
+          }
+        }
+      }
+      
+      // Update UI to show which leads have been called
+      setLeads(prevLeads => 
+        prevLeads.map(l => ({
+          ...l,
+          called: data.data.leads.some((called: any) => 
+            called.lead_id === l.id && (called.success || called.queued)
+          )
+        }))
+      );
     } catch (err: any) {
-      console.error('Error initiating batch calls:', err);
+      console.error('Error starting batch calls:', err);
       setError(err.message);
       setBatchCallInProgress(false);
     } finally {

@@ -10,7 +10,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8001', // Match the updated port in .env
+        target: 'https://27d4-2601-483-4400-1210-5c4e-1649-f98-7a97.ngrok-free.app', // Using ngrok URL instead of localhost
         changeOrigin: true,
         secure: false,
       }

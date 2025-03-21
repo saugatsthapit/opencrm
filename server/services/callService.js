@@ -489,12 +489,159 @@ const testVapiConfiguration = async (phoneNumber) => {
   }
 };
 
+/**
+ * Get the call history for a lead
+ * @param {string} leadId - The ID of the lead
+ * @returns {object} - Call history information
+ */
+const getLeadCallStatus = async (leadId) => {
+  try {
+    // Get the most recent call tracking record for this lead
+    const { data: callHistory, error } = await supabase
+      .from('call_tracking')
+      .select(`
+        id,
+        call_id,
+        status,
+        created_at,
+        started_at,
+        completed_at,
+        recording_url,
+        error_message,
+        call_conversations (
+          transcript,
+          conversation_data
+        )
+      `)
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error) {
+      console.error('Error fetching lead call history:', error);
+      return { error: 'Failed to fetch call history' };
+    }
+
+    // If no call history exists
+    if (!callHistory || callHistory.length === 0) {
+      return { 
+        called: false,
+        lastCall: null
+      };
+    }
+
+    const lastCall = callHistory[0];
+    return {
+      called: true,
+      lastCall: {
+        id: lastCall.call_id,
+        status: lastCall.status,
+        calledAt: lastCall.started_at || lastCall.created_at,
+        completedAt: lastCall.completed_at,
+        recording: lastCall.recording_url,
+        error: lastCall.error_message,
+        transcript: lastCall.call_conversations?.[0]?.transcript,
+        success: lastCall.status === 'completed' || lastCall.status === 'ended'
+      }
+    };
+  } catch (error) {
+    console.error('Error in getLeadCallStatus:', error);
+    return { error: error.message };
+  }
+};
+
+/**
+ * Manually mark a lead as called
+ * @param {string} leadId - The ID of the lead
+ * @param {object} callDetails - Optional details about the manual call
+ * @returns {object} - Updated call status
+ */
+const markLeadAsCalled = async (leadId, callDetails = {}) => {
+  try {
+    // Check if this is a reset operation
+    if (callDetails.reset) {
+      // Delete the call tracking records for this lead to reset its status
+      const { error: deleteError } = await supabase
+        .from('call_tracking')
+        .delete()
+        .match({ lead_id: leadId, manual_entry: true });
+      
+      if (deleteError) {
+        console.error('Error resetting call status:', deleteError);
+        return { error: 'Failed to reset call status' };
+      }
+      
+      return {
+        success: true,
+        called: false,
+        reset: true
+      };
+    }
+    
+    const now = new Date().toISOString();
+
+    // Create a call tracking record for the manual call
+    const { data: tracking, error } = await supabase
+      .from('call_tracking')
+      .insert({
+        lead_id: leadId,
+        status: 'completed',
+        call_id: `manual_${Date.now()}`,
+        created_at: now,
+        started_at: callDetails.calledAt || now,
+        completed_at: now,
+        notes: callDetails.notes || 'Manually marked as called',
+        manual_entry: true
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error creating manual call record:', error);
+      return { error: 'Failed to mark lead as called' };
+    }
+
+    // If call details include conversation notes, store them
+    if (callDetails.conversationNotes) {
+      const { error: convError } = await supabase
+        .from('call_conversations')
+        .insert({
+          call_tracking_id: tracking.id,
+          transcript: callDetails.conversationNotes,
+          created_at: now
+        });
+
+      if (convError) {
+        console.error('Error storing conversation notes:', convError);
+      }
+    }
+
+    return {
+      success: true,
+      called: true,
+      lastCall: {
+        id: tracking.call_id,
+        status: 'completed',
+        calledAt: tracking.started_at,
+        completedAt: tracking.completed_at,
+        manual: true,
+        notes: tracking.notes
+      }
+    };
+  } catch (error) {
+    console.error('Error in markLeadAsCalled:', error);
+    return { error: error.message };
+  }
+};
+
 // Export all functions using CommonJS syntax
 module.exports = {
   placeCall,
   handleVapiWebhook,
   getCallStatus,
   testVapiConfiguration,
+  getLeadCallStatus,
+  markLeadAsCalled,
   VAPI_PUBLIC_KEY,
   VAPI_PRIVATE_KEY
 }; 

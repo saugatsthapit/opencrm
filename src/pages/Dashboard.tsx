@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import { Upload, Search, Filter, SendHorizontal, AlertCircle, Trash2, AlertTriangle, Clock, CheckCircle, XCircle, Mail, X, Info, Eye } from 'lucide-react';
+import { Upload, Search, Filter, SendHorizontal, AlertCircle, Trash2, AlertTriangle, Clock, CheckCircle, XCircle, Mail, X, Info, Eye, Phone, User } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
 
@@ -32,6 +32,18 @@ interface Lead {
     total_steps: number;
     status: string;
   }[];
+  call_status?: {
+    has_been_called: boolean;
+    last_call?: {
+      id: string;
+      status: string;
+      timestamp: string;
+      recording_url?: string;
+      error_message?: string;
+      transcript?: string;
+      success: boolean;
+    };
+  };
 }
 
 interface DuplicateNotification {
@@ -108,7 +120,22 @@ const Dashboard = () => {
       }))
     }));
 
-    setLeads(transformedLeads);
+    // Fetch call status for each lead
+    const leadsWithCallStatus = await Promise.all(transformedLeads.map(async (lead) => {
+      try {
+        const response = await fetch(`/api/v1/calls/lead/${lead.id}/status`);
+        const callStatus = await response.json();
+        return {
+          ...lead,
+          call_status: callStatus
+        };
+      } catch (err) {
+        console.error(`Error fetching call status for lead ${lead.id}:`, err);
+        return lead;
+      }
+    }));
+
+    setLeads(leadsWithCallStatus);
   };
 
   const isDuplicate = (lead: any, existingLeads: any[], uploadedLeads: any[]) => {
@@ -530,6 +557,13 @@ const Dashboard = () => {
               <span>Add to Sequence ({selectedLeads.length})</span>
             </button>
           )}
+          <button
+            onClick={() => navigate('/add-lead')}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+          >
+            <User className="h-5 w-5" />
+            <span>Add Lead</span>
+          </button>
           <label className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700">
             <Upload className="h-5 w-5" />
             <span>Upload Leads</span>
@@ -592,33 +626,174 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow">
-        <div className="p-4 border-b">
-          <label className="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              checked={selectedLeads.length === filteredLeads.length}
-              onChange={toggleSelectAll}
-              className="rounded text-blue-600"
-            />
-            <span>Select All</span>
-          </label>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 p-4">
-          {filteredLeads.map(lead => (
-            <div
-              key={lead.id}
-              className="border rounded-lg p-4 hover:shadow-md transition-shadow"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <h3 className="font-semibold">
-                    {lead.first_name} {lead.last_name}
-                  </h3>
-                  <p className="text-sm text-gray-600">{lead.title}</p>
-                  <p className="text-sm text-gray-600">{lead.email}</p>
-                </div>
-                <div className="flex items-center gap-2">
+      <div className="overflow-x-auto bg-white rounded-lg shadow">
+        <table className="min-w-full">
+          <thead>
+            <tr className="bg-gray-50">
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <input
+                  type="checkbox"
+                  checked={selectedLeads.length === filteredLeads.length}
+                  onChange={() => {
+                    if (selectedLeads.length === filteredLeads.length) {
+                      setSelectedLeads([]);
+                    } else {
+                      setSelectedLeads(filteredLeads.map(lead => lead.id));
+                    }
+                  }}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Name
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Company
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Title
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Call Status
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {filteredLeads.map(lead => (
+              <tr key={lead.id}>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={selectedLeads.includes(lead.id)}
+                    onChange={() => toggleLeadSelection(lead.id)}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center">
+                    <div>
+                      <div className="text-sm font-medium text-gray-900">
+                        {lead.first_name} {lead.last_name}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {lead.email}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="text-sm text-gray-900">{lead.company_name}</div>
+                  <div className="text-sm text-gray-500">
+                    {lead.company_employee_count && `${lead.company_employee_count} employees`}
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                  {lead.title}
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center">
+                    {lead.call_status?.has_been_called ? (
+                      <div className="flex items-center justify-between w-full">
+                        <div className="flex items-center">
+                          <Phone className="h-4 w-4 text-green-500 mr-2" />
+                          <span className="text-sm text-gray-900">
+                            Called {new Date(lead.call_status.last_call?.timestamp || '').toLocaleDateString()}
+                          </span>
+                        </div>
+                        <button 
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                  callDetails: {
+                                    timestamp: new Date().toISOString(),
+                                    notes: 'Manually marked as not called',
+                                    success: false
+                                  },
+                                  reset: true
+                                })
+                              });
+                              // Update local state
+                              setLeads(prevLeads => 
+                                prevLeads.map(l => 
+                                  l.id === lead.id ? { 
+                                    ...l, 
+                                    call_status: { has_been_called: false } 
+                                  } : l
+                                )
+                              );
+                            } catch (err) {
+                              console.error('Error updating call status:', err);
+                            }
+                          }}
+                          className="text-xs text-gray-700 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded ml-2"
+                          title="Mark as not called"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between w-full">
+                        <div className="flex items-center">
+                          <Phone className="h-4 w-4 text-gray-400 mr-2" />
+                          <span className="text-sm text-gray-500">Not called</span>
+                        </div>
+                        <button 
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
+                                method: 'POST',
+                                headers: {
+                                  'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                  callDetails: {
+                                    timestamp: new Date().toISOString(),
+                                    notes: 'Manually marked as called',
+                                    success: true
+                                  }
+                                })
+                              });
+                              // Update local state
+                              setLeads(prevLeads => 
+                                prevLeads.map(l => 
+                                  l.id === lead.id ? { 
+                                    ...l, 
+                                    call_status: { 
+                                      has_been_called: true,
+                                      last_call: {
+                                        id: 'manual',
+                                        status: 'completed',
+                                        timestamp: new Date().toISOString(),
+                                        success: true
+                                      }
+                                    } 
+                                  } : l
+                                )
+                              );
+                            } catch (err) {
+                              console.error('Error updating call status:', err);
+                            }
+                          }}
+                          className="text-xs text-blue-700 bg-blue-100 hover:bg-blue-200 px-2 py-1 rounded ml-2"
+                          title="Mark as called"
+                        >
+                          Mark Called
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -629,57 +804,11 @@ const Dashboard = () => {
                   >
                     <Eye className="h-5 w-5" />
                   </button>
-                  <input
-                    type="checkbox"
-                    checked={selectedLeads.includes(lead.id)}
-                    onChange={() => toggleLeadSelection(lead.id)}
-                    className="mt-1 rounded text-blue-600"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </div>
-              </div>
-              <div className="mt-2 pt-2 border-t">
-                <p className="text-sm font-medium">{lead.company_name}</p>
-                <p className="text-sm text-gray-600">
-                  {lead.company_employee_count} employees
-                </p>
-              </div>
-              {lead.sequences && lead.sequences.length > 0 && (
-                <div className="mt-3 pt-3 border-t">
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">Active Sequences</h4>
-                  <div className="space-y-2">
-                    {lead.sequences.map(sequence => (
-                      <div key={sequence.id} className="bg-gray-50 p-3 rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-sm font-medium">{sequence.name}</span>
-                          <div className="flex items-center gap-2">
-                            {getStatusIcon(sequence.status)}
-                            <span className="text-sm capitalize">
-                              {sequence.status.replace('_', ' ')}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-blue-600 rounded-full"
-                              style={{
-                                width: `${getProgressPercentage(sequence.current_step + 1, sequence.total_steps)}%`
-                              }}
-                            />
-                          </div>
-                          <span className="text-xs text-gray-500">
-                            Step {sequence.current_step + 1} of {sequence.total_steps}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

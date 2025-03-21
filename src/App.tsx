@@ -7,6 +7,7 @@ import Sequences from './pages/Sequences';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import ColdCalling from './pages/ColdCalling';
+import AddLead from './pages/AddLead';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
               <Route path="/cold-calling" element={<ColdCalling />} />
               <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/add-lead" element={<AddLead />} />
             </Routes>
           </main>
         </div>

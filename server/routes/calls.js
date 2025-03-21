@@ -6,7 +6,10 @@ const {
   getTwiMlForTracking,
   getCallStatus,
   createVapiBridge,
-  handleVapiWebhook
+  handleVapiWebhook,
+  testVapiConfiguration,
+  getLeadCallStatus,
+  markLeadAsCalled
 } = require('../services/callService.js');
 const { supabase } = require('../config/supabase.js');
 const callValidation = require('../middleware/callValidation');
@@ -575,7 +578,7 @@ router.post('/test-vapi', async (req, res) => {
     console.log(`Testing VAPI configuration with phone number: ${phone_number}`);
     
     // Call the test function
-    const result = await callService.testVapiConfiguration(phone_number);
+    const result = await testVapiConfiguration(phone_number);
     
     // Return results
     return res.json(result);
@@ -585,6 +588,37 @@ router.post('/test-vapi', async (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+/**
+ * Get call status for a lead
+ * GET /api/v1/calls/lead/:leadId/status
+ */
+router.get('/lead/:leadId/status', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const status = await getLeadCallStatus(leadId);
+    res.json(status);
+  } catch (error) {
+    console.error('Error getting lead call status:', error);
+    res.status(500).json({ error: 'Failed to get lead call status' });
+  }
+});
+
+/**
+ * Mark a lead as called
+ * POST /api/v1/calls/lead/:leadId/mark-called
+ */
+router.post('/lead/:leadId/mark-called', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const { callDetails, reset } = req.body; // Support for reset flag
+    const result = await markLeadAsCalled(leadId, { ...callDetails, reset });
+    res.json(result);
+  } catch (error) {
+    console.error('Error marking lead as called:', error);
+    res.status(500).json({ error: 'Failed to mark lead as called' });
   }
 });
 
