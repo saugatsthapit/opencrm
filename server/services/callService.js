@@ -56,214 +56,149 @@ const formatPhoneNumber = (phoneNumber) => {
   return '+' + digitsOnly;
 };
 
-// Helper function to make VAPI calls (handles SDK and direct API approaches)
-const makeVapiCall = async (callPayload) => {
+/**
+ * Makes a call using the VAPI API with fallback to direct API if the SDK fails
+ */
+const makeVapiCall = async (phoneNumber, leadId, callScript = null, options = {}) => {
   try {
-    // Try SDK first
-    console.log('Attempting to create VAPI call with SDK...');
-    const result = await vapiClient.calls.create(callPayload);
-    console.log('VAPI SDK call successful:', result);
-    return result;
-  } catch (sdkError) {
-    console.error('VAPI SDK call error:', sdkError);
+    // Ensure we use full URL for webhook
+    const appUrl = process.env.VITE_APP_URL || process.env.APP_URL;
+    const ngrokUrl = process.env.NGROK_URL;
+    const webhookUrl = ngrokUrl || (appUrl ? `${appUrl}/api/v1/calls/vapi-webhook` : null);
     
-    // Try direct API if SDK fails
-    console.log('Falling back to direct API call...');
+    console.log(`Using webhook URL: ${webhookUrl}`);
+    
+    // Format phone number to E.164 format if needed
+    let formattedPhoneNumber = phoneNumber;
+    if (!phoneNumber.startsWith('+')) {
+      formattedPhoneNumber = phoneNumber.startsWith('1') ? `+${phoneNumber}` : `+1${phoneNumber}`;
+    }
+    
+    // Initialize payload with required parameters
+    const callPayload = {
+      phoneNumberId: process.env.VITE_VAPI_PHONE_NUMBER_ID,
+      assistantId: process.env.VITE_VAPI_ASSISTANT_ID,
+      customer: {
+        number: formattedPhoneNumber
+      },
+      metadata: {
+        lead_id: leadId,
+        test: options.isTest || false,
+        timestamp: new Date().toISOString()
+      }
+    };
+    
+    // Add webhook configuration if URL is available and valid
+    if (webhookUrl && (webhookUrl.startsWith('https://') || webhookUrl.startsWith('http://'))) {
+      callPayload.server = {
+        url: webhookUrl,
+        subscriptions: ['transcripts', 'status-updates', 'messages', 'end-of-call-report']
+      };
+    }
+    
+    // Create tracking entry before making the call
+    const { data: tracking, error: trackingError } = await supabase
+      .from('call_tracking')
+      .insert({
+        lead_id: leadId,
+        status: 'queued',
+        created_at: new Date().toISOString(),
+        phone_number: formattedPhoneNumber
+      })
+      .select()
+      .single();
+      
+    if (trackingError) {
+      console.error('Error creating call tracking record:', trackingError);
+    }
+    
+    console.log(`Attempting to call ${formattedPhoneNumber} for lead ${leadId}...`);
+    
+    // Try the SDK first
     try {
-      const response = await fetch('https://api.vapi.ai/call', {
+      console.log('Using VAPI SDK...');
+      const call = await vapiClient.calls.create(callPayload);
+      
+      // Update tracking record with call_id
+      if (tracking) {
+        await supabase
+          .from('call_tracking')
+          .update({
+            call_id: call.id,
+            status: call.status
+          })
+          .eq('id', tracking.id);
+      }
+      
+      console.log(`Call created successfully with SDK. Call ID: ${call.id}`);
+      return call;
+    } catch (sdkError) {
+      console.error('SDK call failed, falling back to direct API:', sdkError);
+      
+      // Fallback to direct API call
+      const apiEndpoint = 'https://api.vapi.ai/call/';
+      const apiResponse = await fetch(apiEndpoint, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${VAPI_PRIVATE_KEY}`,
+          'Authorization': `Bearer ${process.env.VITE_VAPI_PRIVATE_KEY}`,
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify(callPayload)
       });
       
-      const responseData = await response.json();
-      
-      if (!response.ok) {
-        console.error('Direct API call failed:', responseData);
-        throw new Error(`Direct API call failed: ${response.status} - ${JSON.stringify(responseData)}`);
+      if (!apiResponse.ok) {
+        const errorText = await apiResponse.text();
+        throw new Error(`API call failed with status ${apiResponse.status}: ${errorText}`);
       }
       
-      console.log('Direct API call succeeded:', responseData);
-      return responseData;
-    } catch (directError) {
-      console.error('Direct API call error:', directError);
-      throw directError;
+      const call = await apiResponse.json();
+      
+      // Update tracking record with call_id
+      if (tracking) {
+        await supabase
+          .from('call_tracking')
+          .update({
+            call_id: call.id,
+            status: call.status
+          })
+          .eq('id', tracking.id);
+      }
+      
+      console.log(`Call created successfully with direct API. Call ID: ${call.id}`);
+      return call;
     }
+  } catch (error) {
+    console.error('Error making VAPI call:', error);
+    throw error;
   }
 };
 
 /**
  * Place an outbound call using VAPI (Voice AI API)
- * @param {string} phone_number - The phone number to call
- * @param {object} lead - The lead data for the call
- * @param {object} callScript - The call script configuration (not used - using VAPI assistant config)
- * @param {string} leadSequenceId - The ID of the lead sequence
- * @param {string} stepId - The ID of the step in the sequence
+ * @param {string} phoneNumber - The phone number to call
+ * @param {string} leadId - The ID of the lead
+ * @param {string} script - The call script configuration (not used - using VAPI assistant config)
  * @returns {object} - The call tracking information
  */
-const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId) => {
+const placeCall = async (phoneNumber, leadId, script = null) => {
   try {
-    console.log(`Preparing to call ${phone_number} for lead ${lead.id}`);
+    console.log('Attempting to create VAPI call...');
     
-    if (!phone_number) {
-      throw new Error('Phone number is required for call step');
-    }
-
-    // Ensure phone number is in E.164 format
-    const formattedPhoneNumber = formatPhoneNumber(phone_number);
-    console.log(`Formatted phone number: ${formattedPhoneNumber}`);
+    // Make the call using our enhanced helper function
+    const callData = await makeVapiCall(phoneNumber, leadId, script);
     
-    if (!VAPI_PRIVATE_KEY) {
-      throw new Error('VAPI Private key is required for cold calling. Please set VITE_VAPI_PRIVATE_KEY in your .env file.');
-    }
-
-    // Create tracking record
-    let tracking;
-    try {
-      const { data, error } = await supabase
-        .from('call_tracking')
-        .insert({
-          lead_sequence_id: leadSequenceId,
-          step_id: stepId,
-          phone_number: formattedPhoneNumber,
-          lead_id: lead.id
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Call tracking record creation failed:', error);
-        
-        // Try a direct SQL approach if RLS is the issue
-        if (error.code === '42501') {
-          console.log('Attempting to bypass RLS with rpc call...');
-          const { data: rpcData, error: rpcError } = await supabase.rpc('create_call_tracking', {
-            p_lead_id: lead.id,
-            p_lead_sequence_id: leadSequenceId || null,
-            p_phone_number: formattedPhoneNumber,
-            p_step_id: stepId || null
-          });
-          
-          if (rpcError) {
-            console.error('RPC call tracking creation failed:', rpcError);
-            throw rpcError;
-          }
-          
-          tracking = rpcData;
-          console.log('Created call tracking record via RPC:', tracking);
-        } else {
-          throw error;
-        }
-      } else {
-        tracking = data;
-        console.log('Created call tracking record:', tracking);
-      }
-    } catch (trackingError) {
-      console.error('All tracking creation attempts failed:', trackingError);
-      
-      // Create a local tracking object to continue with call
-      tracking = {
-        tracking_id: `local-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`,
-        id: null,
-        phone_number: formattedPhoneNumber,
-        lead_id: lead.id
-      };
-      console.log('Using local tracking as fallback:', tracking);
-    }
-    
-    // Check if real calls are enabled (either in production or explicitly enabled)
-    const enableRealCalls = process.env.NODE_ENV === 'production' || process.env.VITE_ENABLE_REAL_CALLS === 'true';
-    
-    let callData;
-    
-    if (enableRealCalls) {
-      try {
-        console.log('Making REAL call to', formattedPhoneNumber);
-        
-        // Create minimal payload using VAPI's assistant configuration
-        const callPayload = {
-          // Name of the call for reference
-          name: `Call to ${lead.first_name || lead.last_name || formattedPhoneNumber}`,
-          
-          // Use existing phone number ID
-          phoneNumberId: VAPI_PHONE_NUMBER_ID,
-          
-          // Use existing assistant ID (which has the call script configured)
-          assistantId: VAPI_ASSISTANT_ID,
-          
-          // Only required customer fields
-          customer: {
-            number: formattedPhoneNumber,
-            name: lead.first_name || lead.last_name || 'Lead'
-          }
-        };
-        
-        // Log just the SDK call attempt
-        console.log('Attempting to create VAPI call...');
-        
-        try {
-          // Make the call using the helper function
-          callData = await makeVapiCall(callPayload);
-          console.log('VAPI call successfully initiated:', callData);
-        } catch (vapiError) {
-          console.error('VAPI call error:', vapiError);
-          throw vapiError;
-        }
-      } catch (vapiError) {
-        console.error('VAPI call error:', vapiError);
-        // Fall back to simulation if VAPI call fails
-        console.log('FALLBACK: Simulating VAPI call due to error');
-        callData = {
-          id: `vapi_${Date.now()}`,
-          status: 'queued',
-          createdAt: new Date().toISOString(),
-          error: vapiError.message
-        };
-      }
-    } else {
-      // Simulated response for development
-      console.log('DEVELOPMENT MODE: Simulating VAPI call instead of making real call');
-      callData = {
-        id: `vapi_${Date.now()}`,
-        status: 'queued',
-        createdAt: new Date().toISOString()
-      };
-    }
-    
-    console.log('Call initiated:', callData);
-    
-    // Update tracking record with call ID
-    if (tracking.id) {
-      const { error: updateError } = await supabase
-        .from('call_tracking')
-        .update({ 
-          call_id: callData.id,
-          status: callData.status || 'queued',
-          started_at: new Date().toISOString()
-        })
-        .eq('id', tracking.id);
-
-      if (updateError) {
-        console.error('Failed to update call tracking record:', updateError);
-      }
-    }
-    
-    // Store in memory for quick access
-    callStatusMap.set(callData.id, {
-      status: callData.status || 'queued',
-      tracking_id: tracking.tracking_id,
-      lead_sequence_id: leadSequenceId,
-      step_id: stepId
-    });
-
-    console.log(`Call initiated with ID: ${callData.id}`);
-    return { ...tracking, call_id: callData.id, call_status: callData.status || 'queued' };
-  } catch (error) {
-    console.error('Error in placeCall:', error);
-    throw error;
+    return {
+      success: true,
+      call_id: callData.id,
+      status: callData.status,
+      customer: callData.customer,
+      assistant_id: callData.assistantId,
+      phone_number_id: callData.phoneNumberId,
+      metadata: callData.metadata
+    };
+  } catch (vapiError) {
+    console.error('Error placing VAPI call:', vapiError);
+    throw vapiError;
   }
 };
 
@@ -273,141 +208,182 @@ const placeCall = async (phone_number, lead, callScript, leadSequenceId, stepId)
  */
 const handleVapiWebhook = async (webhookData) => {
   try {
-    console.log('Received VAPI webhook:', JSON.stringify(webhookData, null, 2));
+    console.log('Processing VAPI webhook:', JSON.stringify(webhookData, null, 2));
     
-    // The webhook data structure has changed - check for message wrapper
-    let call_id, status, customer, artifact, metadata;
-    
-    if (webhookData.message) {
-      // Extract from message structure
-      ({ status } = webhookData.message);
-      
-      if (webhookData.message.call) {
-        call_id = webhookData.message.call.id;
-        customer = webhookData.message.call.customer;
-        metadata = webhookData.message.call.metadata;
-      }
-      
-      if (webhookData.message.artifact) {
-        artifact = webhookData.message.artifact;
-      }
-      
-      console.log(`Extracted call ID from message structure: ${call_id}`);
-    } else {
-      // Use original structure as fallback
-      ({ id: call_id, status, customer, artifact, metadata } = webhookData);
+    if (!webhookData || !webhookData.message) {
+      console.error('Invalid webhook data format');
+      return { error: 'Invalid webhook data format' };
     }
     
-    if (!call_id) {
-      console.error('No call_id in VAPI webhook data');
-      return;
+    const { message } = webhookData;
+    const { type, call } = message;
+    
+    if (!call || !call.id) {
+      console.error('Missing call information in webhook');
+      return { error: 'Missing call information' };
     }
     
-    // Update in-memory status
-    const callInfo = callStatusMap.get(call_id);
-    if (callInfo) {
-      callInfo.status = status;
-      if (status === 'ended') {
-        callInfo.completed = true;
-      }
-    }
-    
-    // Find the tracking record
-    const { data: trackingData, error: findError } = await supabase
+    // First, find the call tracking record to associate with a lead
+    const { data: trackingData, error: trackingError } = await supabase
       .from('call_tracking')
-      .select('id, started_at')
-      .eq('call_id', call_id)
-      .maybeSingle();
-    
-    if (findError || !trackingData) {
-      console.warn(`No call tracking record found for call_id: ${call_id}. Attempting to create one.`);
+      .select('*')
+      .eq('call_id', call.id)
+      .single();
       
-      // Try to create a new tracking record
-      if (status) {
-        try {
-          const { data, error } = await supabase
-            .from('call_tracking')
-            .insert({
-              call_id: call_id,
-              status: status,
-              tracking_id: `vapi-${call_id.substring(0, 8)}`,
-              phone_number: customer ? customer.number : null,
-              created_at: new Date().toISOString()
-            })
-            .select('id')
-            .single();
-          
-          if (!error) {
-            console.log(`Created new call tracking record for call_id: ${call_id}`);
-            trackingData = data;
-          } else {
-            console.error('Error creating call tracking record:', error);
-          }
-        } catch (err) {
-          console.error('Failed to create tracking record:', err.message);
-        }
+    if (trackingError) {
+      console.error(`Call tracking record not found for call ID ${call.id}:`, trackingError);
+      // Try to extract lead ID from metadata if available
+      const leadId = call.metadata?.lead_id;
+      if (!leadId) {
+        return { error: 'Could not determine lead ID for call' };
       }
       
-      if (!trackingData) return;
-    }
-    
-    // Update call status
-    const updateData = {
-      status: status
-    };
-    
-    // Update additional fields based on call status
-    if (status === 'ended') {
-      updateData.completed_at = new Date().toISOString();
-      
-      // Log ended reason if available
-      if (webhookData.message && webhookData.message.endedReason) {
-        updateData.error_message = webhookData.message.endedReason;
-        console.log(`Call ended with reason: ${webhookData.message.endedReason}`);
-      }
-      
-      // Add recording details if available
-      if (artifact) {
-        if (artifact.recordingUrl) {
-          updateData.recording_url = artifact.recordingUrl;
-        }
+      // Create a new tracking record since one doesn't exist
+      const { data: newTracking, error: newError } = await supabase
+        .from('call_tracking')
+        .insert({
+          call_id: call.id,
+          lead_id: leadId,
+          status: call.status,
+          created_at: new Date().toISOString(),
+          started_at: call.startedAt || null,
+          completed_at: null
+        })
+        .select()
+        .single();
         
-        // Store conversation details
-        if (artifact.transcript || artifact.messages) {
-          try {
-            await supabase
-              .from('call_conversations')
-              .insert({
-                call_tracking_id: trackingData.id,
-                transcript: artifact.transcript,
-                conversation_data: artifact.messages,
-                created_at: new Date().toISOString()
-              });
-            
-            console.log('Stored call conversation transcript and messages');
-          } catch (convError) {
-            console.error('Error storing call conversation:', convError);
-          }
-        }
+      if (newError) {
+        console.error('Failed to create call tracking record:', newError);
+        return { error: 'Failed to track call' };
       }
-    } else if (status === 'in-progress' && !trackingData.started_at) {
-      updateData.started_at = new Date().toISOString();
     }
     
-    // Update the tracking record
-    const { error: updateError } = await supabase
+    // Get tracking record (either existing or newly created)
+    const { data: currentTracking } = await supabase
       .from('call_tracking')
-      .update(updateData)
-      .eq('id', trackingData.id);
+      .select('*')
+      .eq('call_id', call.id)
+      .single();
     
-    if (updateError) {
-      console.error('Error updating call tracking status:', updateError);
-    } else {
-      console.log(`Successfully updated status to ${status} for call ${call_id}`);
+    const leadId = currentTracking?.lead_id || call.metadata?.lead_id;
+    
+    if (!leadId) {
+      console.error('Could not determine lead ID for call');
+      return { error: 'Could not determine lead ID for call' };
     }
+    
+    // Process different webhook event types
+    switch (type) {
+      case 'status-update':
+        await handleStatusUpdate(message, currentTracking, leadId);
+        break;
+        
+      case 'end-of-call-report':
+        await handleEndOfCallReport(message, currentTracking, leadId);
+        break;
+        
+      case 'hang':
+        await handleHangNotification(message, currentTracking, leadId);
+        break;
+        
+      default:
+        console.log(`Unhandled webhook type: ${type}`);
+    }
+    
+    return { success: true };
   } catch (error) {
-    console.error('Error handling VAPI webhook:', error);
+    console.error('Error processing webhook:', error);
+    return { error: error.message };
   }
+};
+
+// Handle status updates (in-progress, forwarding, ended)
+const handleStatusUpdate = async (message, tracking, leadId) => {
+  const { status, call } = message;
+  
+  // Update the call tracking record with the new status
+  const { error } = await supabase
+    .from('call_tracking')
+    .update({
+      status: status,
+      updated_at: new Date().toISOString(),
+      ...(status === 'in-progress' && { started_at: new Date().toISOString() }),
+      ...(status === 'ended' && { completed_at: new Date().toISOString() })
+    })
+    .eq('id', tracking.id);
+    
+  if (error) {
+    console.error('Error updating call status:', error);
+  }
+  
+  console.log(`Call ${call.id} status updated to ${status}`);
+};
+
+// Handle end-of-call report with transcript, recording URL, and summary
+const handleEndOfCallReport = async (message, tracking, leadId) => {
+  const { endedReason, recordingUrl, summary, transcript, messages, call } = message;
+  
+  // Update the call tracking record with end of call information
+  const { error: trackingError } = await supabase
+    .from('call_tracking')
+    .update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      recording_url: recordingUrl || null,
+      summary: summary || null,
+      ended_reason: endedReason || null
+    })
+    .eq('id', tracking.id);
+    
+  if (trackingError) {
+    console.error('Error updating call completion info:', trackingError);
+  }
+  
+  // Store the transcript if available
+  if (transcript) {
+    const { error: transcriptError } = await supabase
+      .from('call_conversations')
+      .insert({
+        call_tracking_id: tracking.id,
+        transcript: transcript,
+        messages: messages || null,
+        created_at: new Date().toISOString()
+      });
+      
+    if (transcriptError) {
+      console.error('Error storing call transcript:', transcriptError);
+    }
+  }
+  
+  // Mark the lead as called
+  const result = await markLeadAsCalled(leadId, {
+    callId: call.id,
+    notes: summary || 'Call completed',
+    success: true,
+    recording: recordingUrl
+  });
+  
+  console.log(`Call ${call.id} completed, lead ${leadId} marked as called:`, result);
+};
+
+// Handle hang notifications (AI failed to respond)
+const handleHangNotification = async (message, tracking, leadId) => {
+  const { call } = message;
+  
+  // Update the call tracking record with hang information
+  const { error } = await supabase
+    .from('call_tracking')
+    .update({
+      notes: (tracking.notes ? tracking.notes + '\n' : '') + 'AI hang detected during call',
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', tracking.id);
+    
+  if (error) {
+    console.error('Error updating call with hang notification:', error);
+  }
+  
+  console.log(`Hang notification for call ${call.id}`);
 };
 
 /**
@@ -472,7 +448,7 @@ const testVapiConfiguration = async (phoneNumber) => {
     
     try {
       // Make the call using our helper function
-      const result = await makeVapiCall(simplePayload);
+      const result = await makeVapiCall(formattedPhoneNumber, null, null, { isTest: true });
       console.log('VAPI test call successful:', result);
       return { success: true, call_id: result.id, message: 'Test call successful!' };
     } catch (error) {
@@ -496,53 +472,58 @@ const testVapiConfiguration = async (phoneNumber) => {
  */
 const getLeadCallStatus = async (leadId) => {
   try {
-    // Get the most recent call tracking record for this lead
-    const { data: callHistory, error } = await supabase
+    // Find any call tracking records for this lead
+    const { data: callData, error } = await supabase
       .from('call_tracking')
       .select(`
-        id,
-        call_id,
-        status,
-        created_at,
-        started_at,
-        completed_at,
-        recording_url,
-        error_message,
+        *,
         call_conversations (
           transcript,
-          conversation_data
+          messages
         )
       `)
       .eq('lead_id', leadId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-
+      .order('created_at', { ascending: false });
+    
     if (error) {
-      console.error('Error fetching lead call history:', error);
-      return { error: 'Failed to fetch call history' };
+      console.error('Error fetching lead call status:', error);
+      return { error: 'Failed to fetch call status' };
     }
-
-    // If no call history exists
-    if (!callHistory || callHistory.length === 0) {
-      return { 
-        called: false,
-        lastCall: null
-      };
+    
+    // If no calls found, return not called
+    if (!callData || callData.length === 0) {
+      return { has_been_called: false };
     }
-
-    const lastCall = callHistory[0];
+    
+    // Return the latest call details
+    const lastCall = callData[0];
+    const lastCallConversation = lastCall.call_conversations && lastCall.call_conversations.length > 0 
+      ? lastCall.call_conversations[0] 
+      : null;
+    
     return {
-      called: true,
-      lastCall: {
+      has_been_called: true,
+      last_call: {
         id: lastCall.call_id,
         status: lastCall.status,
-        calledAt: lastCall.started_at || lastCall.created_at,
-        completedAt: lastCall.completed_at,
-        recording: lastCall.recording_url,
-        error: lastCall.error_message,
-        transcript: lastCall.call_conversations?.[0]?.transcript,
+        timestamp: lastCall.created_at,
+        recording_url: lastCall.recording_url,
+        error_message: lastCall.error_message,
+        transcript: lastCallConversation?.transcript,
+        summary: lastCall.summary || null,
+        ended_reason: lastCall.ended_reason || null,
+        notes: lastCall.notes || null,
+        interest_status: lastCall.interest_status || null,
         success: lastCall.status === 'completed' || lastCall.status === 'ended'
-      }
+      },
+      all_calls: callData.map(call => ({
+        id: call.call_id,
+        status: call.status,
+        timestamp: call.created_at,
+        recording_url: call.recording_url || null,
+        interest_status: call.interest_status || null,
+        success: call.status === 'completed' || call.status === 'ended'
+      }))
     };
   } catch (error) {
     console.error('Error in getLeadCallStatus:', error);

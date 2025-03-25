@@ -41,8 +41,20 @@ interface Lead {
       recording_url?: string;
       error_message?: string;
       transcript?: string;
+      summary?: string;
+      ended_reason?: string;
+      notes?: string;
+      interest_status?: 'green' | 'yellow' | 'red' | null;
       success: boolean;
     };
+    all_calls?: {
+      id: string;
+      status: string;
+      timestamp: string;
+      recording_url?: string;
+      success: boolean;
+      interest_status?: 'green' | 'yellow' | 'red' | null;
+    }[];
   };
 }
 
@@ -306,192 +318,415 @@ const Dashboard = () => {
   };
 
   const LeadDetailsModal = ({ lead, onClose }: { lead: Lead, onClose: () => void }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editedLead, setEditedLead] = useState(lead);
+    const [isSaving, setIsSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const handleInterestStatusUpdate = async (leadId: string, status: 'green' | 'yellow' | 'red') => {
+      try {
+        const response = await fetch(`/api/v1/calls/lead/${leadId}/interest-status`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ interestStatus: status })
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to update interest status');
+        }
+
+        // Update local state
+        setEditedLead(prev => ({
+          ...prev,
+          call_status: {
+            has_been_called: true,
+            last_call: {
+              ...prev.call_status?.last_call,
+              interest_status: status,
+              id: prev.call_status?.last_call?.id || '',
+              status: prev.call_status?.last_call?.status || 'completed',
+              timestamp: prev.call_status?.last_call?.timestamp || new Date().toISOString(),
+              success: true
+            }
+          }
+        }));
+
+        // Close modal to refresh data
+        onClose();
+        window.location.reload();
+      } catch (err: any) {
+        console.error('Error updating interest status:', err);
+        setError(err.message);
+      }
+    };
+
+    const handleSave = async () => {
+      try {
+        setIsSaving(true);
+        setError(null);
+        
+        const { error: updateError } = await supabase
+          .from('leads')
+          .update({
+            first_name: editedLead.first_name,
+            last_name: editedLead.last_name,
+            email: editedLead.email,
+            company_name: editedLead.company_name,
+            title: editedLead.title,
+            mobile_phone1: editedLead.mobile_phone1,
+            mobile_phone2: editedLead.mobile_phone2,
+            company_employee_count: editedLead.company_employee_count,
+            company_domain: editedLead.company_domain,
+            company_website: editedLead.company_website,
+            company_employee_count_range: editedLead.company_employee_count_range,
+            company_founded: editedLead.company_founded,
+            company_industry: editedLead.company_industry,
+            company_type: editedLead.company_type,
+            company_headquarters: editedLead.company_headquarters,
+            company_revenue_range: editedLead.company_revenue_range,
+            company_linkedin_url: editedLead.company_linkedin_url,
+            linkedin: editedLead.linkedin,
+            location: editedLead.location
+          })
+          .eq('id', lead.id);
+
+        if (updateError) throw updateError;
+
+        // Update the lead in the parent component
+        onClose();
+        window.location.reload(); // Refresh to get updated data
+      } catch (err: any) {
+        console.error('Error updating lead:', err);
+        setError(err.message);
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-          <div className="flex items-center justify-between p-4 border-b">
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold">Lead Details</h2>
-            <button 
-              onClick={onClose}
-              className="p-1 rounded-full hover:bg-gray-100"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          
-          <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Personal Information */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium border-b pb-2">Contact Information</h3>
-              
-              <div className="space-y-3">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Name</h4>
-                  <p className="text-lg font-semibold">{lead.first_name} {lead.last_name}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Title</h4>
-                  <p>{lead.title || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Email</h4>
-                  <p className="break-all">{lead.email || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Phone</h4>
-                  <p>{lead.mobile_phone1 || 'Not specified'}</p>
-                  {lead.mobile_phone2 && <p>{lead.mobile_phone2}</p>}
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Location</h4>
-                  <p>{lead.location || 'Not specified'}</p>
-                </div>
-                
-                {lead.linkedin && (
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-500">LinkedIn</h4>
-                    <a 
-                      href={lead.linkedin}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline break-all"
-                    >
-                      {lead.linkedin}
-                    </a>
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            {/* Company Information */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium border-b pb-2">Company Information</h3>
-              
-              <div className="space-y-3">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Company</h4>
-                  <p className="text-lg font-semibold">{lead.company_name || 'Not specified'}</p>
-                </div>
-                
-                {lead.company_website && (
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-500">Website</h4>
-                    <a 
-                      href={lead.company_website.startsWith('http') ? lead.company_website : `https://${lead.company_website}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline break-all"
-                    >
-                      {lead.company_website}
-                    </a>
-                  </div>
-                )}
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Industry</h4>
-                  <p>{lead.company_industry || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Company Type</h4>
-                  <p>{lead.company_type || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Size</h4>
-                  <p>{lead.company_employee_count || lead.company_employee_count_range || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Revenue Range</h4>
-                  <p>{lead.company_revenue_range || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Headquarters</h4>
-                  <p>{lead.company_headquarters || 'Not specified'}</p>
-                </div>
-                
-                <div>
-                  <h4 className="text-sm font-medium text-gray-500">Founded</h4>
-                  <p>{lead.company_founded || 'Not specified'}</p>
-                </div>
-                
-                {lead.company_linkedin_url && (
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-500">Company LinkedIn</h4>
-                    <a 
-                      href={lead.company_linkedin_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:underline break-all"
-                    >
-                      {lead.company_linkedin_url}
-                    </a>
-                  </div>
-                )}
-              </div>
+            <div className="flex space-x-2">
+              {isEditing ? (
+                <>
+                  <button
+                    onClick={() => setIsEditing(false)}
+                    className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    className="px-3 py-1 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="px-3 py-1 text-sm bg-blue-500 text-white hover:bg-blue-600 rounded"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded"
+                  >
+                    Close
+                  </button>
+                </>
+              )}
             </div>
           </div>
-          
-          {/* Sequences */}
-          {lead.sequences && lead.sequences.length > 0 && (
-            <div className="p-6 border-t">
-              <h3 className="text-lg font-medium mb-4">Active Sequences</h3>
-              <div className="space-y-4">
-                {lead.sequences.map(sequence => (
-                  <div key={sequence.id} className="bg-gray-50 p-4 rounded-lg">
-                    <div className="flex items-center justify-between mb-3">
-                      <span className="font-medium">{sequence.name}</span>
-                      <div className="flex items-center gap-2">
-                        {getStatusIcon(sequence.status)}
-                        <span className="text-sm capitalize">
-                          {sequence.status.replace('_', ' ')}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-blue-600 rounded-full"
-                          style={{
-                            width: `${getProgressPercentage(sequence.current_step + 1, sequence.total_steps)}%`
-                          }}
-                        />
-                      </div>
-                      <span className="text-xs text-gray-500">
-                        Step {sequence.current_step + 1} of {sequence.total_steps}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-100 text-red-700 rounded">
+              {error}
             </div>
           )}
-          
-          <div className="flex justify-end gap-3 p-4 border-t">
-            <button
-              onClick={() => {
-                // Navigate to cold calling page with this lead pre-selected
-                navigate('/cold-calling', { state: { selectedLeadId: lead.id } });
-              }}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-            >
-              Call this Lead
-            </button>
-            <button
-              onClick={() => {
-                // Navigate to sequences page with this lead pre-selected
-                navigate('/sequences', { state: { selectedLeads: [lead.id] } });
-              }}
-              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-            >
-              Add to Sequence
-            </button>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">First Name</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.first_name || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, first_name: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.first_name || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Last Name</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.last_name || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, last_name: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.last_name || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Email</label>
+              {isEditing ? (
+                <input
+                  type="email"
+                  value={editedLead.email || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, email: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.email || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Title</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.title || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, title: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.title || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Name</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_name || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_name: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_name || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Primary Phone</label>
+              {isEditing ? (
+                <input
+                  type="tel"
+                  value={editedLead.mobile_phone1 || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, mobile_phone1: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.mobile_phone1 || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Secondary Phone</label>
+              {isEditing ? (
+                <input
+                  type="tel"
+                  value={editedLead.mobile_phone2 || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, mobile_phone2: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.mobile_phone2 || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">LinkedIn</label>
+              {isEditing ? (
+                <input
+                  type="url"
+                  value={editedLead.linkedin || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, linkedin: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.linkedin || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Location</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.location || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, location: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.location || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Domain</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_domain || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_domain: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_domain || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Website</label>
+              {isEditing ? (
+                <input
+                  type="url"
+                  value={editedLead.company_website || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_website: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_website || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Size</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_employee_count_range || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_employee_count_range: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_employee_count_range || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Industry</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_industry || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_industry: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_industry || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Type</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_type || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_type: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_type || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Headquarters</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_headquarters || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_headquarters: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_headquarters || 'N/A'}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company Revenue Range</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedLead.company_revenue_range || ''}
+                  onChange={(e) => setEditedLead({ ...editedLead, company_revenue_range: e.target.value })}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
+                />
+              ) : (
+                <p className="mt-1">{lead.company_revenue_range || 'N/A'}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Call Status Section */}
+          <div className="mt-6 border-t pt-4">
+            <h3 className="text-lg font-semibold mb-4">Call Status</h3>
+            {lead.call_status?.has_been_called ? (
+              <div>
+                <p className="text-sm text-gray-600">
+                  Last Call: {new Date(lead.call_status.last_call?.timestamp || '').toLocaleString()}
+                </p>
+                {lead.call_status.last_call?.interest_status && (
+                  <div className="mt-2">
+                    <p className="text-sm font-medium text-gray-700">Interest Level:</p>
+                    <div className="flex space-x-2 mt-1">
+                      <button
+                        onClick={() => handleInterestStatusUpdate(lead.id, 'green')}
+                        className={`px-3 py-1 rounded text-sm ${
+                          lead.call_status.last_call.interest_status === 'green'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        Interested
+                      </button>
+                      <button
+                        onClick={() => handleInterestStatusUpdate(lead.id, 'yellow')}
+                        className={`px-3 py-1 rounded text-sm ${
+                          lead.call_status.last_call.interest_status === 'yellow'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        Not Available
+                      </button>
+                      <button
+                        onClick={() => handleInterestStatusUpdate(lead.id, 'red')}
+                        className={`px-3 py-1 rounded text-sm ${
+                          lead.call_status.last_call.interest_status === 'red'
+                            ? 'bg-red-100 text-red-800'
+                            : 'bg-gray-100 text-gray-800'
+                        }`}
+                      >
+                        Not Interested
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600">No calls made yet</p>
+            )}
           </div>
         </div>
       </div>
@@ -696,49 +931,178 @@ const Dashboard = () => {
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center">
                     {lead.call_status?.has_been_called ? (
-                      <div className="flex items-center justify-between w-full">
-                        <div className="flex items-center">
-                          <Phone className="h-4 w-4 text-green-500 mr-2" />
-                          <span className="text-sm text-gray-900">
-                            Called {new Date(lead.call_status.last_call?.timestamp || '').toLocaleDateString()}
-                          </span>
-                        </div>
-                        <button 
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            try {
-                              await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
-                                method: 'POST',
-                                headers: {
-                                  'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({
-                                  callDetails: {
-                                    timestamp: new Date().toISOString(),
-                                    notes: 'Manually marked as not called',
-                                    success: false
+                      <div className="flex flex-col w-full">
+                        <div className="flex items-center justify-between w-full">
+                          <div className="flex items-center">
+                            <Phone className="h-4 w-4 text-green-500 mr-2" />
+                            <span className="text-sm text-gray-900">
+                              Called {new Date(lead.call_status.last_call?.timestamp || '').toLocaleDateString()}
+                            </span>
+                          </div>
+                          <button 
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json'
                                   },
-                                  reset: true
-                                })
-                              });
-                              // Update local state
-                              setLeads(prevLeads => 
-                                prevLeads.map(l => 
-                                  l.id === lead.id ? { 
-                                    ...l, 
-                                    call_status: { has_been_called: false } 
-                                  } : l
-                                )
-                              );
-                            } catch (err) {
-                              console.error('Error updating call status:', err);
-                            }
-                          }}
-                          className="text-xs text-gray-700 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded ml-2"
-                          title="Mark as not called"
-                        >
-                          Reset
-                        </button>
+                                  body: JSON.stringify({
+                                    callDetails: {
+                                      timestamp: new Date().toISOString(),
+                                      notes: 'Manually marked as not called',
+                                      success: false
+                                    },
+                                    reset: true
+                                  })
+                                });
+                                // Update local state
+                                setLeads(prevLeads => 
+                                  prevLeads.map(l => 
+                                    l.id === lead.id ? { 
+                                      ...l, 
+                                      call_status: { has_been_called: false } 
+                                    } : l
+                                  )
+                                );
+                              } catch (err) {
+                                console.error('Error updating call status:', err);
+                              }
+                            }}
+                            className="text-xs text-gray-700 bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded ml-2"
+                            title="Mark as not called"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                        
+                        {/* Interest Status Indicator and Buttons */}
+                        <div className="mt-2 flex items-center gap-2">
+                          <div className="text-xs text-gray-600">Interest:</div>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                    method: 'POST',
+                                    headers: {
+                                      'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                      interestStatus: 'green'
+                                    })
+                                  });
+                                  // Update local state
+                                  setLeads(prevLeads => 
+                                    prevLeads.map(l => {
+                                      if (l.id === lead.id && l.call_status) {
+                                        return { 
+                                          ...l, 
+                                          call_status: { 
+                                            ...l.call_status,
+                                            last_call: l.call_status.last_call ? {
+                                              ...l.call_status.last_call,
+                                              interest_status: 'green' as const
+                                            } : undefined
+                                          } 
+                                        };
+                                      }
+                                      return l;
+                                    })
+                                  );
+                                } catch (err) {
+                                  console.error('Error updating interest status:', err);
+                                }
+                              }}
+                              className={`w-6 h-6 rounded-full ${lead.call_status.last_call?.interest_status === 'green' 
+                                ? 'bg-green-500 ring-2 ring-green-300' 
+                                : 'bg-green-200 hover:bg-green-300'}`}
+                              title="Interested"
+                            />
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                    method: 'POST',
+                                    headers: {
+                                      'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                      interestStatus: 'yellow'
+                                    })
+                                  });
+                                  // Update local state
+                                  setLeads(prevLeads => 
+                                    prevLeads.map(l => {
+                                      if (l.id === lead.id && l.call_status) {
+                                        return { 
+                                          ...l, 
+                                          call_status: { 
+                                            ...l.call_status,
+                                            last_call: l.call_status.last_call ? {
+                                              ...l.call_status.last_call,
+                                              interest_status: 'yellow' as const
+                                            } : undefined
+                                          } 
+                                        };
+                                      }
+                                      return l;
+                                    })
+                                  );
+                                } catch (err) {
+                                  console.error('Error updating interest status:', err);
+                                }
+                              }}
+                              className={`w-6 h-6 rounded-full ${lead.call_status.last_call?.interest_status === 'yellow' 
+                                ? 'bg-yellow-500 ring-2 ring-yellow-300' 
+                                : 'bg-yellow-200 hover:bg-yellow-300'}`}
+                              title="Not available"
+                            />
+                            <button
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                    method: 'POST',
+                                    headers: {
+                                      'Content-Type': 'application/json'
+                                    },
+                                    body: JSON.stringify({
+                                      interestStatus: 'red'
+                                    })
+                                  });
+                                  // Update local state
+                                  setLeads(prevLeads => 
+                                    prevLeads.map(l => {
+                                      if (l.id === lead.id && l.call_status) {
+                                        return { 
+                                          ...l, 
+                                          call_status: { 
+                                            ...l.call_status,
+                                            last_call: l.call_status.last_call ? {
+                                              ...l.call_status.last_call,
+                                              interest_status: 'red' as const
+                                            } : undefined
+                                          } 
+                                        };
+                                      }
+                                      return l;
+                                    })
+                                  );
+                                } catch (err) {
+                                  console.error('Error updating interest status:', err);
+                                }
+                              }}
+                              className={`w-6 h-6 rounded-full ${lead.call_status.last_call?.interest_status === 'red' 
+                                ? 'bg-red-500 ring-2 ring-red-300' 
+                                : 'bg-red-200 hover:bg-red-300'}`}
+                              title="Not interested"
+                            />
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <div className="flex items-center justify-between w-full">

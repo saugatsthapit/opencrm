@@ -364,15 +364,23 @@ router.post('/recording', async (req, res) => {
 
 /**
  * @route POST /api/v1/calls/vapi-webhook
- * @desc Handle VAPI webhooks
- * @access Public
+ * @desc Handle webhooks from VAPI for call status updates and end-of-call reports
  */
 router.post('/vapi-webhook', async (req, res) => {
   try {
     console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
     
     // Process the webhook
-    await handleVapiWebhook(req.body);
+    const result = await handleVapiWebhook(req.body);
+    
+    if (result.error) {
+      console.warn('Warning processing webhook:', result.error);
+      // Still return 200 to VAPI to avoid retries
+      return res.status(200).json({
+        success: false,
+        message: result.error
+      });
+    }
     
     // Return success response
     return res.status(200).json({
@@ -381,7 +389,9 @@ router.post('/vapi-webhook', async (req, res) => {
     });
   } catch (error) {
     console.error('Error processing VAPI webhook:', error);
-    return res.status(500).json({
+    // Always return 200 for webhooks, even on errors
+    // This prevents VAPI from retrying the webhook
+    return res.status(200).json({
       success: false,
       message: error.message || 'Failed to process webhook'
     });
@@ -619,6 +629,58 @@ router.post('/lead/:leadId/mark-called', async (req, res) => {
   } catch (error) {
     console.error('Error marking lead as called:', error);
     res.status(500).json({ error: 'Failed to mark lead as called' });
+  }
+});
+
+// Update interest status for a lead
+router.post('/lead/:leadId/interest-status', async (req, res) => {
+  const { leadId } = req.params;
+  const { interestStatus } = req.body;
+  
+  if (!leadId) {
+    return res.status(400).json({ error: 'Lead ID is required' });
+  }
+  
+  if (!interestStatus || !['green', 'yellow', 'red'].includes(interestStatus)) {
+    return res.status(400).json({ error: 'Valid interest status (green, yellow, red) is required' });
+  }
+  
+  try {
+    // Get the most recent call for this lead
+    const { data: callData, error: callError } = await supabase
+      .from('call_tracking')
+      .select('*')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    if (callError) {
+      console.error('Error fetching call data:', callError);
+      return res.status(500).json({ error: 'Failed to fetch call data' });
+    }
+    
+    if (!callData || callData.length === 0) {
+      return res.status(404).json({ error: 'No call found for this lead' });
+    }
+    
+    // Update the interest status
+    const { error: updateError } = await supabase
+      .from('call_tracking')
+      .update({ interest_status: interestStatus })
+      .eq('id', callData[0].id);
+    
+    if (updateError) {
+      console.error('Error updating interest status:', updateError);
+      return res.status(500).json({ error: 'Failed to update interest status' });
+    }
+    
+    return res.status(200).json({ 
+      success: true, 
+      message: `Interest status updated to ${interestStatus}` 
+    });
+  } catch (error) {
+    console.error('Error updating interest status:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 

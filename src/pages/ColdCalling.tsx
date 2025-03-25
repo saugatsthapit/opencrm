@@ -16,6 +16,22 @@ interface Lead {
   mobile_phone2: string | null;
   title: string | null;
   called?: boolean;
+  call_status?: {
+    has_been_called: boolean;
+    last_call?: {
+      id: string;
+      status: string;
+      timestamp: string;
+      recording_url?: string;
+      error_message?: string;
+      transcript?: string;
+      summary?: string;
+      ended_reason?: string;
+      notes?: string;
+      interest_status?: 'green' | 'yellow' | 'red' | null;
+      success: boolean;
+    };
+  };
 }
 
 export default function ColdCalling() {
@@ -120,17 +136,31 @@ export default function ColdCalling() {
     return '+' + digitsOnly;
   };
 
-  const handleTestCall = async (phoneNumber: string) => {
+  const handleTestCall = async () => {
     if (!selectedLead) {
-      setError('Please select a lead first');
+      setError('No lead selected');
       return;
     }
-
+    
+    // Find the selected lead to get its call status and interest level
+    const lead = leads.find(l => l.id === selectedLead);
+    
+    // Prevent calling leads with Green or Red interest status
+    if (lead?.call_status?.last_call?.interest_status === 'green' || 
+        lead?.call_status?.last_call?.interest_status === 'red') {
+      const statusText = lead.call_status.last_call.interest_status === 'green' ? 'interested' : 'not interested';
+      setError(`This lead has already been marked as ${statusText}. Are you sure you want to call again?`);
+      
+      // Show a confirmation dialog
+      if (!window.confirm(`This lead is marked as ${statusText}. Call anyway?`)) {
+        return;
+      }
+    }
+    
+    setLoading(true);
+    setError(null);
+    
     try {
-      setLoading(true);
-      setError(null);
-      setCallResult(null);
-
       // Format the phone number before making the call
       const formattedNumber = formatPhoneNumber(phoneNumber);
 
@@ -143,23 +173,19 @@ export default function ColdCalling() {
       setCallResult(response);
       
       // Mark this lead as called using our new endpoint
-      try {
-        await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            callDetails: {
-              timestamp: new Date().toISOString(),
-              notes: `Call placed to ${formattedNumber}`,
-              success: true
-            }
-          })
-        });
-      } catch (err) {
-        console.error('Error marking lead as called:', err);
-      }
+      await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          callDetails: {
+            timestamp: new Date().toISOString(),
+            notes: `Call placed to ${formattedNumber}`,
+            success: true
+          }
+        })
+      });
       
       // Mark this lead as called in the UI
       setLeads(prevLeads => 
@@ -716,7 +742,7 @@ export default function ColdCalling() {
                     
                     <button
                       className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
-                      onClick={() => handleTestCall(phoneNumber)}
+                      onClick={handleTestCall}
                       disabled={loading || !phoneNumber}
                     >
                       {loading ? (
