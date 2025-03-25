@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Download, ChevronDown, ChevronUp, Phone, PhoneOff, PhoneMissed } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { getCallHistory } from '../lib/vapi';
+import { getApiBaseUrl } from '../config/env';
 
 type CallHistoryProps = {
   leadId?: string;
   limit?: number;
   showAll?: boolean;
+  ngrokUrl?: string;
 };
 
 type Call = {
@@ -29,7 +32,7 @@ type Conversation = {
   created_at: string;
 };
 
-export default function CallHistory({ leadId, limit = 5, showAll = false }: CallHistoryProps) {
+export default function CallHistory({ leadId, limit = 5, showAll = false, ngrokUrl }: CallHistoryProps) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +44,29 @@ export default function CallHistory({ leadId, limit = 5, showAll = false }: Call
         setLoading(true);
         setError(null);
         
+        // If leadId is provided, try to fetch from API first
+        if (leadId) {
+          try {
+            // Use the getApiBaseUrl utility
+            const apiBaseUrl = getApiBaseUrl();
+            console.log(`Fetching call history with API base URL: ${apiBaseUrl}`);
+            
+            const response = await fetch(`${apiBaseUrl}/calls/history/${leadId}`);
+            if (response.ok) {
+              const apiResponse = await response.json();
+              if (apiResponse && apiResponse.success && apiResponse.data) {
+                setCalls(apiResponse.data || []);
+                setLoading(false);
+                return;
+              }
+            }
+          } catch (apiErr) {
+            console.warn('Failed to fetch from API, falling back to Supabase:', apiErr);
+            // Continue with Supabase fallback
+          }
+        }
+        
+        // Fallback to Supabase direct query
         let query = supabase
           .from('call_tracking')
           .select(`
@@ -71,7 +97,7 @@ export default function CallHistory({ leadId, limit = 5, showAll = false }: Call
     }
     
     fetchCalls();
-  }, [leadId, limit, showAll]);
+  }, [leadId, limit, showAll, ngrokUrl]);
   
   const toggleCallExpand = (callId: string) => {
     setExpandedCalls(prev => ({

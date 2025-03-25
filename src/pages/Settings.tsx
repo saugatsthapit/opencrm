@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { AlertCircle, CheckCircle, Mail, Linkedin, Send } from 'lucide-react';
+import { AlertCircle, CheckCircle, Mail, Linkedin, Send, Globe, Phone } from 'lucide-react';
 import { emailService } from '../lib/email';
 import { linkedInService } from '../lib/linkedin';
+import CorsTest from '../components/CorsTest';
+import { debugCallAPI } from '../lib/api';
 
 const Settings = () => {
   const [emailConfig, setEmailConfig] = useState({
@@ -26,6 +28,9 @@ const Settings = () => {
     message: 'This is a test email from your CRM system.',
   });
   const [sendingTest, setSendingTest] = useState(false);
+
+  const [callApiTestResult, setCallApiTestResult] = useState<any>(null);
+  const [testingCallApi, setTestingCallApi] = useState(false);
 
   const sendTestEmail = async () => {
     if (!testEmail.to) {
@@ -54,6 +59,28 @@ const Settings = () => {
       setError(err instanceof Error ? err.message : 'Failed to send test email');
     } finally {
       setSendingTest(false);
+    }
+  };
+
+  const testCallApi = async () => {
+    setTestingCallApi(true);
+    setError(null);
+    setSuccess(null);
+    setCallApiTestResult(null);
+
+    try {
+      const result = await debugCallAPI();
+      setCallApiTestResult(result);
+      
+      if (result.success) {
+        setSuccess('Call API test successful!');
+      } else {
+        setError(`Call API test failed: ${result.error}`);
+      }
+    } catch (err: any) {
+      setError(`Error testing Call API: ${err.message}`);
+    } finally {
+      setTestingCallApi(false);
     }
   };
 
@@ -88,6 +115,63 @@ const Settings = () => {
       )}
 
       <div className="grid gap-8">
+        {/* API Connectivity Test */}
+        <div className="bg-white rounded-lg shadow">
+          <div className="p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <Globe className="h-6 w-6 text-blue-600" />
+              <h2 className="text-lg font-semibold">API Connectivity Test</h2>
+            </div>
+            
+            <CorsTest />
+            
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center gap-3 mb-4">
+                <Phone className="h-5 w-5 text-blue-600" />
+                <h3 className="text-md font-medium">Call API Specific Test</h3>
+              </div>
+              
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-600">
+                  Test the Call API endpoint specifically for CORS issues
+                </p>
+                <button
+                  onClick={testCallApi}
+                  disabled={testingCallApi}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {testingCallApi ? (
+                    <>
+                      <span className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Testing...
+                    </>
+                  ) : (
+                    <>
+                      <Phone className="h-4 w-4" />
+                      Test Call API
+                    </>
+                  )}
+                </button>
+              </div>
+              
+              {callApiTestResult && (
+                <div className="mt-4">
+                  <div className={`p-3 rounded ${callApiTestResult.success ? 'bg-green-50' : 'bg-red-50'}`}>
+                    <p className={`font-medium ${callApiTestResult.success ? 'text-green-700' : 'text-red-700'}`}>
+                      {callApiTestResult.success ? 'Test Passed' : 'Test Failed'}
+                    </p>
+                    {callApiTestResult.data && (
+                      <div className="mt-2 text-sm bg-white/50 p-2 rounded overflow-auto max-h-40">
+                        <pre>{JSON.stringify(callApiTestResult.data, null, 2)}</pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
         {/* Email Settings */}
         <div className="bg-white rounded-lg shadow">
           <div className="p-6">

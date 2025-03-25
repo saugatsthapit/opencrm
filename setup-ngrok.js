@@ -1,175 +1,212 @@
-const { spawn } = require('child_process');
-const fs = require('fs');
-const readline = require('readline');
-const dotenv = require('dotenv');
+#!/usr/bin/env node
 
-// Create readline interface for user input
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-// Check if authtoken is already set
-function checkAuthToken() {
+const ENV_LOCAL_PATH = path.resolve('.env.local');
+
+// ANSI color codes for prettier console output
+const COLORS = {
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  red: '\x1b[31m'
+};
+
+console.log(`
+${COLORS.bright}${COLORS.blue}==================================================${COLORS.reset}
+${COLORS.bright}${COLORS.blue}            NgRok Setup Assistant${COLORS.reset}
+${COLORS.bright}${COLORS.blue}==================================================${COLORS.reset}
+`);
+
+console.log(`${COLORS.cyan}This script helps you set up your ngrok configuration for the FastCRM application.${COLORS.reset}
+${COLORS.dim}It will create or update your .env.local file with the necessary variables.${COLORS.reset}
+`);
+
+// Function to check if ngrok is installed
+async function checkNgrokInstallation() {
+  const { exec } = require('child_process');
+  
   return new Promise((resolve) => {
-    console.log('Checking ngrok authentication status...');
-    
-    const checkProcess = spawn('npx', ['ngrok', 'authtoken', '--check'], { shell: true });
-    
-    checkProcess.stdout.on('data', (data) => {
-      console.log(data.toString());
-      if (data.toString().includes('Authtoken is valid')) {
-        console.log('✅ ngrok auth token is already set up');
+    exec('ngrok --version', (error) => {
+      if (error) {
+        console.log(`${COLORS.yellow}⚠️ ngrok doesn't seem to be installed or is not in your PATH.${COLORS.reset}`);
+        console.log(`${COLORS.dim}You can install it from https://ngrok.com/download${COLORS.reset}\n`);
+        resolve(false);
+      } else {
+        console.log(`${COLORS.green}✅ ngrok is installed${COLORS.reset}\n`);
         resolve(true);
       }
     });
+  });
+}
+
+// Function to check if a port is in use
+async function isPortInUse(port) {
+  const { exec } = require('child_process');
+  
+  return new Promise((resolve) => {
+    const command = process.platform === 'win32' 
+      ? `netstat -ano | findstr :${port}` 
+      : `lsof -i:${port}`;
     
-    checkProcess.stderr.on('data', (data) => {
-      if (data.toString().includes('auth token check failed')) {
-        console.log('⚠️ ngrok auth token is not set up yet');
-        resolve(false);
-      }
+    exec(command, (error, stdout) => {
+      resolve(!!stdout.trim());
     });
-    
-    checkProcess.on('close', (code) => {
-      if (code !== 0) {
-        resolve(false);
+  });
+}
+
+// Function to prompt for ngrok URL
+function promptForNgrokUrl() {
+  return new Promise((resolve) => {
+    rl.question(`${COLORS.bright}Please enter your ngrok URL (e.g., https://abcd1234.ngrok-free.app):${COLORS.reset} `, (answer) => {
+      try {
+        // Basic URL validation
+        if (!answer.trim()) {
+          console.log(`${COLORS.red}❌ Empty URL provided${COLORS.reset}`);
+          return promptForNgrokUrl().then(resolve);
+        }
+        
+        if (!answer.startsWith('http')) {
+          console.log(`${COLORS.red}❌ URL must start with http:// or https://${COLORS.reset}`);
+          return promptForNgrokUrl().then(resolve);
+        }
+        
+        try {
+          new URL(answer);
+          resolve(answer.trim());
+        } catch (e) {
+          console.log(`${COLORS.red}❌ Invalid URL format${COLORS.reset}`);
+          return promptForNgrokUrl().then(resolve);
+        }
+      } catch (error) {
+        console.log(`${COLORS.red}❌ Error validating URL: ${error.message}${COLORS.reset}`);
+        return promptForNgrokUrl().then(resolve);
       }
     });
   });
 }
 
-// Set up ngrok auth token
-function setupAuthToken() {
-  return new Promise((resolve) => {
-    rl.question('Please enter your ngrok auth token (from https://dashboard.ngrok.com/get-started/your-authtoken): ', (token) => {
-      console.log('Setting up ngrok auth token...');
+// Function to check existing .env.local file
+function checkExistingEnvFile() {
+  try {
+    if (fs.existsSync(ENV_LOCAL_PATH)) {
+      const content = fs.readFileSync(ENV_LOCAL_PATH, 'utf8');
+      const lines = content.split('\n');
       
-      const authProcess = spawn('npx', ['ngrok', 'authtoken', token], { shell: true });
-      
-      authProcess.stdout.on('data', (data) => {
-        console.log(data.toString());
-      });
-      
-      authProcess.stderr.on('data', (data) => {
-        console.error(data.toString());
-      });
-      
-      authProcess.on('close', (code) => {
-        if (code === 0) {
-          console.log('✅ ngrok auth token set up successfully');
-          resolve(true);
-        } else {
-          console.error('❌ Failed to set up ngrok auth token');
-          resolve(false);
+      // Extract existing variables
+      const existingVars = {};
+      lines.forEach(line => {
+        if (line.trim() && !line.startsWith('#')) {
+          const [key, ...valueParts] = line.split('=');
+          if (key && valueParts.length) {
+            existingVars[key.trim()] = valueParts.join('=').trim();
+          }
         }
       });
-    });
-  });
-}
-
-// Start ngrok tunnel
-function startNgrok(port) {
-  return new Promise((resolve) => {
-    console.log(`Starting ngrok tunnel to port ${port}...`);
-    
-    const ngrokProcess = spawn('npx', ['ngrok', 'http', port], { shell: true });
-    
-    let ngrokUrl = null;
-    
-    ngrokProcess.stdout.on('data', (data) => {
-      console.log(data.toString());
       
-      // Try to extract the ngrok URL
-      const output = data.toString();
-      const forwardingMatch = output.match(/Forwarding\s+(https:\/\/[a-zA-Z0-9-]+\.ngrok\.io)/);
+      console.log(`${COLORS.blue}ℹ️ Found existing .env.local file${COLORS.reset}`);
       
-      if (forwardingMatch && forwardingMatch[1] && !ngrokUrl) {
-        ngrokUrl = forwardingMatch[1];
-        console.log(`\n✅ ngrok URL: ${ngrokUrl}\n`);
-        updateEnvFile(ngrokUrl, port);
-        resolve(ngrokUrl);
+      if (existingVars.VITE_NGROK_URL) {
+        console.log(`${COLORS.blue}ℹ️ Current NGROK URL: ${existingVars.VITE_NGROK_URL}${COLORS.reset}\n`);
       }
-    });
-    
-    ngrokProcess.stderr.on('data', (data) => {
-      console.error(data.toString());
-    });
-    
-    // Keep the process running - user will need to manually kill with Ctrl+C
-  });
+      
+      return existingVars;
+    } else {
+      console.log(`${COLORS.blue}ℹ️ No existing .env.local file found. Will create a new one.${COLORS.reset}\n`);
+      return {};
+    }
+  } catch (error) {
+    console.log(`${COLORS.red}❌ Error reading .env.local: ${error.message}${COLORS.reset}`);
+    return {};
+  }
 }
 
-// Update .env file with ngrok URL
-function updateEnvFile(ngrokUrl, port) {
+// Function to save variables to .env.local
+function saveEnvFile(variables) {
   try {
-    dotenv.config();
+    let content = '# FastCRM environment configuration - generated by setup-ngrok.js\n';
+    content += '# This file should not be committed to version control\n\n';
     
-    // Read current .env file
-    const envPath = './.env';
-    let envContent = fs.readFileSync(envPath, 'utf8');
+    Object.entries(variables).forEach(([key, value]) => {
+      content += `${key}=${value}\n`;
+    });
     
-    // Update the VITE_APP_URL
-    if (envContent.includes('VITE_APP_URL=')) {
-      envContent = envContent.replace(
-        /VITE_APP_URL=.*/,
-        `VITE_APP_URL=${ngrokUrl}`
-      );
-    } else {
-      envContent += `\nVITE_APP_URL=${ngrokUrl}\n`;
-    }
-    
-    // Write back to file
-    fs.writeFileSync(envPath, envContent);
-    
-    console.log(`✅ Updated .env file with ngrok URL: ${ngrokUrl}`);
-    console.log('✅ Please restart your server to apply these changes');
-    console.log(`\nYou can now use the production site at https://fastcrm.netlify.app/`);
-    console.log(`It will connect to your local server through ngrok for API calls.\n`);
+    fs.writeFileSync(ENV_LOCAL_PATH, content, 'utf8');
+    console.log(`${COLORS.green}✅ Successfully saved configuration to .env.local${COLORS.reset}`);
+    return true;
   } catch (error) {
-    console.error('Error updating .env file:', error);
+    console.log(`${COLORS.red}❌ Error saving .env.local: ${error.message}${COLORS.reset}`);
+    return false;
   }
+}
+
+// Function to check if the server is running
+async function checkServerStatus(port = 8002) {
+  const portInUse = await isPortInUse(port);
+  
+  if (portInUse) {
+    console.log(`${COLORS.green}✅ Server appears to be running on port ${port}${COLORS.reset}`);
+  } else {
+    console.log(`${COLORS.yellow}⚠️ Server does not appear to be running on port ${port}${COLORS.reset}`);
+    console.log(`${COLORS.dim}Start the server with: npm run server${COLORS.reset}\n`);
+  }
+  
+  return portInUse;
 }
 
 // Main function
 async function main() {
   try {
-    console.log('=== FastCRM ngrok Setup ===');
+    // Check if ngrok is installed
+    await checkNgrokInstallation();
     
-    // Load environment variables
-    dotenv.config();
+    // Check server status
+    await checkServerStatus();
     
-    // Determine the port from the .env file or use default
-    const port = process.env.PORT || 8002;
+    // Check existing .env.local file
+    const existingVars = checkExistingEnvFile();
     
-    // Check if auth token is already set
-    const isAuthSet = await checkAuthToken();
+    // Get ngrok URL from user
+    const ngrokUrl = await promptForNgrokUrl();
     
-    // If not set, prompt user to set it up
-    if (!isAuthSet) {
-      console.log('\nYou need to set up an ngrok account and auth token first.');
-      console.log('1. Sign up at https://dashboard.ngrok.com/signup (it\'s free)');
-      console.log('2. Get your auth token at https://dashboard.ngrok.com/get-started/your-authtoken');
+    // Derive API URL from ngrok URL
+    const apiUrl = `${ngrokUrl}/api/v1`;
+    
+    // Prepare variables to save
+    const variables = {
+      ...existingVars,
+      VITE_NGROK_URL: ngrokUrl,
+      VITE_API_URL: apiUrl
+    };
+    
+    // Save to .env.local
+    if (saveEnvFile(variables)) {
+      console.log(`\n${COLORS.green}${COLORS.bright}🎉 Setup complete!${COLORS.reset}\n`);
+      console.log(`${COLORS.cyan}Next steps:${COLORS.reset}`);
+      console.log(`${COLORS.bright}1. Make sure your server is running (npm run server)${COLORS.reset}`);
+      console.log(`${COLORS.bright}2. Make sure ngrok is running (ngrok http 8002)${COLORS.reset}`);
+      console.log(`${COLORS.bright}3. Restart your development server (npm run dev)${COLORS.reset}\n`);
       
-      const tokenSet = await setupAuthToken();
-      if (!tokenSet) {
-        console.error('Failed to set up ngrok. Please try again.');
-        rl.close();
-        return;
-      }
+      console.log(`${COLORS.dim}Configuration saved:${COLORS.reset}`);
+      console.log(`${COLORS.dim}- NGROK URL: ${ngrokUrl}${COLORS.reset}`);
+      console.log(`${COLORS.dim}- API URL: ${apiUrl}${COLORS.reset}\n`);
     }
-    
-    // Start ngrok (this will keep running until user kills it)
-    await startNgrok(port);
-    
-    // Keep readline open for user to use Ctrl+C to exit
-    console.log('\nPress Ctrl+C to stop the ngrok tunnel when you\'re done testing.');
-    
   } catch (error) {
-    console.error('Error:', error);
+    console.log(`${COLORS.red}❌ An error occurred: ${error.message}${COLORS.reset}`);
+  } finally {
     rl.close();
   }
 }
 
-// Start the script
 main(); 

@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { getApiBaseUrl as getConfigApiBaseUrl } from '../config/env';
 
 // Determine the API base URL based on the current environment
 const getApiBaseUrl = () => {
@@ -7,9 +8,18 @@ const getApiBaseUrl = () => {
     // Check if the user has configured a local server with ngrok in localStorage
     const storedNgrokUrl = localStorage.getItem('ngrok_url');
     
-    if (storedNgrokUrl) {
-      console.log(`Using configured ngrok URL: ${storedNgrokUrl}`);
-      return `${storedNgrokUrl}/api/v1/calls`;
+    // Check environment variables for ngrok URL
+    const envNgrokUrl = import.meta.env.VITE_NGROK_URL || import.meta.env.NGROK_URL;
+    
+    // Log for debugging
+    console.log('NGROK URL from localStorage:', storedNgrokUrl);
+    console.log('NGROK URL from env:', envNgrokUrl);
+    
+    const ngrokUrl = storedNgrokUrl || envNgrokUrl;
+    
+    if (ngrokUrl) {
+      console.log(`Using configured ngrok URL: ${ngrokUrl}`);
+      return `${ngrokUrl}/api/v1/calls`;
     }
     
     // Ask the user if they want to set up a ngrok URL
@@ -41,6 +51,7 @@ const getApiBaseUrl = () => {
   return '/api/v1/calls';
 };
 
+// Get the base URL from localStorage or environment
 const API_BASE_URL = getApiBaseUrl();
 
 // Helper function to clear ngrok settings (for debugging)
@@ -63,12 +74,13 @@ export const placeCall = async (
   phoneNumber: string,
   leadId: string | object,
   script: any,
+  ngrokUrl?: string,
   leadSequenceId?: string,
   stepId?: string
 ) => {
   try {
     // Check if we're on production without a properly configured ngrok
-    if (window.location.hostname === 'fastcrm.netlify.app' && !localStorage.getItem('ngrok_url')) {
+    if (window.location.hostname === 'fastcrm.netlify.app' && !localStorage.getItem('ngrok_url') && !ngrokUrl) {
       throw new Error(
         'Cold calling can only be tested from the production site with a properly configured ngrok URL. ' +
         'Please run the app locally or configure a ngrok URL by running setNgrokUrl("your-url") from the browser console.'
@@ -96,12 +108,25 @@ export const placeCall = async (
     if (!lead) {
       throw new Error('Invalid lead data');
     }
+    
+    // ALWAYS use a local path that will go through Vite's proxy
+    // This fixes the CORS issue by using the proxy instead of direct ngrok URL
+    const baseUrl = '/api/v1/calls';
+    console.log(`[vapi] Using local proxy path: ${baseUrl}`);
 
-    // Make API request to our new endpoint
-    const response = await fetch(`${API_BASE_URL}`, {
+    console.log(`[vapi] Making call API request to: ${baseUrl}`);
+    console.log(`[vapi] Request payload:`, { 
+      phoneNumber, 
+      leadId: lead.id, 
+      scriptLength: JSON.stringify(script).length 
+    });
+
+    // Make API request to our endpoint
+    const response = await fetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: JSON.stringify({
         phone_number: phoneNumber,
@@ -114,14 +139,31 @@ export const placeCall = async (
       mode: 'cors',
     });
 
+    console.log(`[vapi] API response status:`, response.status);
+    
+    // For CORS errors and debugging
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to place call');
+      console.error(`[vapi] Error response:`, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries([...response.headers.entries()]),
+      });
+      
+      try {
+        const errorData = await response.json();
+        console.error(`[vapi] Error data:`, errorData);
+        throw new Error(errorData.error || `Failed to place call: ${response.statusText}`);
+      } catch (jsonError) {
+        // If we can't parse the JSON, just use the status text
+        throw new Error(`Failed to place call (${response.status}): ${response.statusText}`);
+      }
     }
 
-    return await response.json();
+    const data = await response.json();
+    console.log(`[vapi] Call placed successfully:`, data);
+    return data;
   } catch (error) {
-    console.error('Error placing call:', error);
+    console.error('[vapi] Error placing call:', error);
     throw error;
   }
 };
@@ -131,14 +173,20 @@ export const placeCallLegacy = async (
   phoneNumber: string,
   leadId: string,
   script: any,
+  ngrokUrl?: string,
   leadSequenceId?: string,
   stepId?: string
 ) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/place`, {
+    // ALWAYS use a local path that will go through Vite's proxy
+    const baseUrl = '/api/v1/calls';
+    console.log(`[vapi] Using local proxy path (legacy): ${baseUrl}`);
+    
+    const response = await fetch(`${baseUrl}/place`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: JSON.stringify({
         phone_number: phoneNumber,
@@ -158,7 +206,7 @@ export const placeCallLegacy = async (
 
     return await response.json();
   } catch (error) {
-    console.error('Error placing call:', error);
+    console.error('[vapi] Error placing call (legacy):', error);
     throw error;
   }
 };
@@ -166,12 +214,17 @@ export const placeCallLegacy = async (
 /**
  * Get the status of a specific call
  */
-export const getCallStatus = async (callId: string) => {
+export const getCallStatus = async (callId: string, ngrokUrl?: string) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/status/${callId}`, {
+    // ALWAYS use a local path that will go through Vite's proxy
+    const baseUrl = '/api/v1/calls';
+    console.log(`[vapi] Using local proxy path (getCallStatus): ${baseUrl}`);
+    
+    const response = await fetch(`${baseUrl}/status/${callId}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       credentials: 'include',
       mode: 'cors',
@@ -184,7 +237,7 @@ export const getCallStatus = async (callId: string) => {
 
     return await response.json();
   } catch (error) {
-    console.error('Error getting call status:', error);
+    console.error('[vapi] Error getting call status:', error);
     throw error;
   }
 };
@@ -192,12 +245,17 @@ export const getCallStatus = async (callId: string) => {
 /**
  * Get call history for a specific lead
  */
-export const getCallHistory = async (leadId: string) => {
+export const getCallHistory = async (leadId: string, ngrokUrl?: string) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/history/${leadId}`, {
+    // ALWAYS use a local path that will go through Vite's proxy
+    const baseUrl = '/api/v1/calls';
+    console.log(`[vapi] Using local proxy path (getCallHistory): ${baseUrl}`);
+    
+    const response = await fetch(`${baseUrl}/history/${leadId}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       credentials: 'include',
       mode: 'cors',
@@ -210,7 +268,7 @@ export const getCallHistory = async (leadId: string) => {
 
     return await response.json();
   } catch (error) {
-    console.error('Error getting call history:', error);
+    console.error('[vapi] Error getting call history:', error);
     throw error;
   }
 };
@@ -235,6 +293,37 @@ export const getCallHistoryFromSupabase = async (leadId: string, limit = 10) => 
     return data || [];
   } catch (error) {
     console.error('Error fetching call history from Supabase:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get call recordings for a specific call
+ */
+export const getCallRecordings = async (callId: string, ngrokUrl?: string) => {
+  try {
+    // ALWAYS use a local path that will go through Vite's proxy
+    const baseUrl = '/api/v1/calls';
+    console.log(`[vapi] Using local proxy path (getCallRecordings): ${baseUrl}`);
+    
+    const response = await fetch(`${baseUrl}/recordings/${callId}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      credentials: 'include',
+      mode: 'cors',
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to get call recordings');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('[vapi] Error getting call recordings:', error);
     throw error;
   }
 };

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { Upload, Search, Filter, SendHorizontal, AlertCircle, Trash2, AlertTriangle, Clock, CheckCircle, XCircle, Mail, X, Info, Eye, Phone, User } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useNavigate } from 'react-router-dom';
+import { getNgrokUrl, getApiBaseUrl } from '../config/env';
 
 interface Lead {
   id: string;
@@ -91,8 +92,18 @@ const Dashboard = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [showLeadDetails, setShowLeadDetails] = useState(false);
+  
+  // Use our new utility function to get the ngrokUrl
+  const [ngrokUrl, setNgrokUrl] = useState(getNgrokUrl);
 
   useEffect(() => {
+    console.log('[Dashboard] Component mounted');
+    // Debug log environment info
+    console.log('[Dashboard] Environment info:', {
+      ngrokUrl: getNgrokUrl(),
+      apiBaseUrl: getApiBaseUrl(),
+      windowLocation: window.location.href,
+    });
     fetchLeads();
   }, []);
 
@@ -135,7 +146,14 @@ const Dashboard = () => {
     // Fetch call status for each lead
     const leadsWithCallStatus = await Promise.all(transformedLeads.map(async (lead) => {
       try {
-        const response = await fetch(`/api/v1/calls/lead/${lead.id}/status`);
+        const apiBaseUrl = getApiBaseUrl();
+        console.log(`[Dashboard] Fetching call status for lead ${lead.id} using API base URL: ${apiBaseUrl}`);
+        const response = await fetch(`${apiBaseUrl}/calls/lead/${lead.id}/status`);
+        
+        if (!response.ok) {
+          throw new Error(`API responded with status: ${response.status}`);
+        }
+        
         const callStatus = await response.json();
         return {
           ...lead,
@@ -325,7 +343,9 @@ const Dashboard = () => {
 
     const handleInterestStatusUpdate = async (leadId: string, status: 'green' | 'yellow' | 'red') => {
       try {
-        const response = await fetch(`/api/v1/calls/lead/${leadId}/interest-status`, {
+        // Use utility function to get API base URL
+        const baseUrl = getApiBaseUrl();
+        const response = await fetch(`${baseUrl}/calls/lead/${leadId}/interest-status`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -943,7 +963,8 @@ const Dashboard = () => {
                             onClick={async (e) => {
                               e.stopPropagation();
                               try {
-                                await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
+                                const baseUrl = getApiBaseUrl();
+                                await fetch(`${baseUrl}/calls/lead/${lead.id}/mark-called`, {
                                   method: 'POST',
                                   headers: {
                                     'Content-Type': 'application/json'
@@ -985,7 +1006,8 @@ const Dashboard = () => {
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 try {
-                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                  const baseUrl = getApiBaseUrl();
+                                  await fetch(`${baseUrl}/calls/lead/${lead.id}/interest-status`, {
                                     method: 'POST',
                                     headers: {
                                       'Content-Type': 'application/json'
@@ -1025,7 +1047,8 @@ const Dashboard = () => {
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 try {
-                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                  const baseUrl = getApiBaseUrl();
+                                  await fetch(`${baseUrl}/calls/lead/${lead.id}/interest-status`, {
                                     method: 'POST',
                                     headers: {
                                       'Content-Type': 'application/json'
@@ -1065,7 +1088,8 @@ const Dashboard = () => {
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 try {
-                                  await fetch(`/api/v1/calls/lead/${lead.id}/interest-status`, {
+                                  const baseUrl = getApiBaseUrl();
+                                  await fetch(`${baseUrl}/calls/lead/${lead.id}/interest-status`, {
                                     method: 'POST',
                                     headers: {
                                       'Content-Type': 'application/json'
@@ -1114,7 +1138,8 @@ const Dashboard = () => {
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {
-                              await fetch(`/api/v1/calls/lead/${lead.id}/mark-called`, {
+                              const baseUrl = getApiBaseUrl();
+                              await fetch(`${baseUrl}/calls/lead/${lead.id}/mark-called`, {
                                 method: 'POST',
                                 headers: {
                                   'Content-Type': 'application/json'

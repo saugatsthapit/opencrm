@@ -14,6 +14,10 @@ const {
 const { supabase } = require('../config/supabase.js');
 const callValidation = require('../middleware/callValidation');
 const { createClient } = require('@supabase/supabase-js');
+const axios = require('axios');
+const { Call, CallHistory } = require('../models');
+const { saveSequenceStep } = require('../services/workflowService');
+require('dotenv').config();
 
 const router = express.Router();
 
@@ -35,53 +39,161 @@ try {
   console.error('Failed to initialize Supabase service client:', error);
 }
 
+// Helper function to add CORS headers to all responses
+const addCorsHeaders = (res, origin) => {
+  // If no origin, allow all
+  const allowedOrigin = origin || '*';
+  
+  res.header('Access-Control-Allow-Origin', allowedOrigin);
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  console.log(`[CORS] Set headers for origin: ${allowedOrigin}`);
+  return res;
+};
+
+// Handle preflight OPTIONS requests for all routes
+router.options('*', (req, res) => {
+  console.log(`[CORS] Handling OPTIONS request from origin: ${req.headers.origin}`);
+  addCorsHeaders(res, req.headers.origin);
+  return res.status(200).send();
+});
+
+// Helper to fetch lead data from Supabase
+const fetchLeadData = async (leadId) => {
+  try {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('id', leadId)
+      .single();
+      
+    if (error) {
+      console.error('Error fetching lead data from Supabase:', error);
+      return null;
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Exception fetching lead data:', error);
+    return null;
+  }
+};
+
+// Helper to process script with lead data
+const processScript = (script, lead) => {
+  // Start with a copy of the script
+  const processedScript = { ...script };
+  
+  // For each value in the script, replace placeholders with lead data
+  const replacePlaceholders = (text) => {
+    if (!text) return '';
+    
+    // Replace first name
+    text = text.replace(/{{firstName}}/g, lead.first_name || '');
+    // Replace last name
+    text = text.replace(/{{lastName}}/g, lead.last_name || '');
+    // Replace full name
+    text = text.replace(/{{fullName}}/g, `${lead.first_name || ''} ${lead.last_name || ''}`);
+    // Replace company
+    text = text.replace(/{{company}}/g, lead.company_name || '');
+    // Replace title
+    text = text.replace(/{{title}}/g, lead.title || '');
+    
+    return text;
+  };
+  
+  // Process script fields
+  if (processedScript.greeting) processedScript.greeting = replacePlaceholders(processedScript.greeting);
+  if (processedScript.introduction) processedScript.introduction = replacePlaceholders(processedScript.introduction);
+  if (processedScript.closing) processedScript.closing = replacePlaceholders(processedScript.closing);
+  
+  // Process arrays in the script
+  if (Array.isArray(processedScript.talking_points)) {
+    processedScript.talking_points = processedScript.talking_points.map(replacePlaceholders);
+  }
+  
+  if (Array.isArray(processedScript.questions)) {
+    processedScript.questions = processedScript.questions.map(replacePlaceholders);
+  }
+  
+  return processedScript;
+};
+
 /**
  * Place an outbound call
  */
 router.post('/', async (req, res) => {
   try {
-    const { 
-      phone_number, 
-      lead, 
-      script, 
-      lead_sequence_id, 
-      step_id 
-    } = req.body;
+    // Log the entire request for debugging
+    console.log('Received request to /api/v1/calls:');
+    console.log('- Headers:', req.headers);
+    console.log('- Origin:', req.headers.origin);
+    console.log('- Path:', req.path);
+    console.log('- Method:', req.method);
+    console.log('- Body:', JSON.stringify(req.body, null, 2));
     
-    console.log(`Call request received for ${phone_number}`, { 
-      lead_id: lead?.id,
-      lead_sequence_id,
-      step_id
-    });
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
+    const { phone_number, lead, script, lead_sequence_id, step_id } = req.body;
     
     if (!phone_number) {
-      return res.status(400).json({ error: 'Phone number is required' });
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number is required'
+      });
     }
     
-    if (!lead || !lead.id) {
-      return res.status(400).json({ error: 'Lead information is required' });
+    if (!lead) {
+      return res.status(400).json({
+        success: false,
+        error: 'Lead information is required'
+      });
     }
     
     if (!script) {
-      return res.status(400).json({ error: 'Call script is required' });
-    }
-    
-    const result = await placeCall(phone_number, lead, script, lead_sequence_id, step_id);
-    
-    // Handle case where there was a Twilio error but we returned a simulated response
-    if (result.error) {
-      res.status(200).json({ 
-        success: true, 
-        warning: 'Call simulated - Twilio error', 
-        error_details: result.error,
-        result: result
+      return res.status(400).json({
+        success: false,
+        error: 'Call script is required'
       });
-    } else {
-      res.json(result);
     }
+    
+    // Extract lead ID from the lead object or use the lead object as the ID
+    const leadId = typeof lead === 'object' ? lead.id : lead;
+    
+    console.log(`Placing call to ${phone_number} for lead ID ${leadId}`);
+    
+    // Process the script with lead data if lead is an object
+    const leadData = typeof lead === 'object' ? lead : await fetchLeadData(leadId);
+    if (!leadData) {
+      return res.status(404).json({
+        success: false,
+        error: 'Lead not found'
+      });
+    }
+    
+    // Process the script with lead data
+    const processedScript = processScript(script, leadData);
+    
+    // Place the call - always pass just the leadId
+    const result = await placeCall(phone_number, leadId, processedScript);
+    
+    console.log('Call placed successfully:', result);
+    
+    // Return success response
+    return res.status(200).json({
+      success: true,
+      message: 'Call initiated successfully',
+      ...result
+    });
   } catch (error) {
-    console.error('Call API error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error in POST /api/v1/calls:', error);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to place call'
+    });
   }
 });
 
@@ -92,6 +204,10 @@ router.post('/', async (req, res) => {
  */
 router.post('/place', callValidation.validateOutboundCall, async (req, res) => {
   try {
+    console.log(`[Calls API] Received call request from origin: ${req.headers.origin}`);
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { phone_number, lead_id, call_script } = req.body;
     
     if (!phone_number) {
@@ -129,8 +245,8 @@ router.post('/place', callValidation.validateOutboundCall, async (req, res) => {
     // Update the call script with lead data
     const processedScript = processScript(call_script, leadData);
     
-    // Place the call
-    const result = await placeCall(phone_number, processedScript, leadData);
+    // Place the call - pass just the leadId instead of the full leadData object
+    const result = await placeCall(phone_number, lead_id, processedScript);
     
     // Return success response
     return res.status(200).json({
@@ -154,6 +270,9 @@ router.post('/place', callValidation.validateOutboundCall, async (req, res) => {
  */
 router.post('/place-batch', callValidation.validateOutboundCall, async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { lead_ids, call_script, delay_seconds = 60 } = req.body;
     
     if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
@@ -213,7 +332,8 @@ router.post('/place-batch', callValidation.validateOutboundCall, async (req, res
       const processedScript = processScript(call_script, leadData);
       
       try {
-        const result = await placeCall(firstLead.phone, processedScript, leadData);
+        // Place the call with just the lead ID
+        const result = await placeCall(firstLead.phone, firstLead.lead_id, processedScript);
         firstLead.call_result = result;
         firstLead.queued = false;
         firstLead.message = 'Call initiated successfully';
@@ -248,6 +368,9 @@ router.post('/place-batch', callValidation.validateOutboundCall, async (req, res
  */
 router.get('/vapi-bridge/:trackingId', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { trackingId } = req.params;
     console.log(`VAPI bridge request received for tracking ID: ${trackingId}`);
     
@@ -278,6 +401,9 @@ router.get('/vapi-bridge/:trackingId', async (req, res) => {
  */
 router.post('/vapi-bridge/:trackingId', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { trackingId } = req.params;
     console.log(`VAPI bridge POST request received for tracking ID: ${trackingId}`);
     console.log('Request body:', req.body);
@@ -309,6 +435,9 @@ router.post('/vapi-bridge/:trackingId', async (req, res) => {
  */
 router.get('/twiml/:trackingId', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { trackingId } = req.params;
     console.log(`TwiML request received for tracking ID: ${trackingId}`);
     
@@ -339,6 +468,9 @@ router.get('/twiml/:trackingId', async (req, res) => {
  */
 router.post('/status', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     console.log('Call status webhook received:', req.body);
     await handleCallStatus(req.body);
     res.status(200).send('OK');
@@ -353,6 +485,9 @@ router.post('/status', async (req, res) => {
  */
 router.post('/recording', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     console.log('Recording webhook received:', req.body);
     await handleRecording(req.body);
     res.status(200).send('OK');
@@ -368,6 +503,9 @@ router.post('/recording', async (req, res) => {
  */
 router.post('/vapi-webhook', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
     
     // Process the webhook
@@ -404,6 +542,9 @@ router.post('/vapi-webhook', async (req, res) => {
  */
 router.get('/status/:callId', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { callId } = req.params;
     const callStatus = await getCallStatus(callId);
     
@@ -432,6 +573,9 @@ router.get('/status/:callId', async (req, res) => {
  */
 router.get('/history/:leadId', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { leadId } = req.params;
     
     if (!supabase) {
@@ -485,97 +629,12 @@ router.get('/history/:leadId', async (req, res) => {
   }
 });
 
-/**
- * Fetch lead data from Supabase
- * @param {string} leadId - The ID of the lead
- * @returns {Promise<object>} - The lead data
- */
-async function fetchLeadData(leadId) {
-  try {
-    // If no leadId provided, return null
-    if (!leadId) {
-      console.warn('No lead ID provided to fetchLeadData');
-      return null;
-    }
-    
-    // Use main supabase client from config
-    if (!supabase) {
-      console.warn('Supabase client not available, returning mock lead data');
-      // For development, we can return mock data when Supabase is not configured
-      return {
-        id: leadId,
-        first_name: 'Test',
-        last_name: 'User',
-        company_name: 'Test Company',
-        email: 'test@example.com',
-        phone: '+12345678900',
-        title: 'Test Title'
-      };
-    }
-    
-    const { data, error } = await supabase
-      .from('leads')
-      .select('*')
-      .eq('id', leadId)
-      .single();
-    
-    if (error) {
-      console.error('Error fetching lead data:', error);
-      throw error;
-    }
-    
-    return data;
-  } catch (error) {
-    console.error('Error in fetchLeadData:', error);
-    return null;
-  }
-}
-
-/**
- * Process the call script and replace placeholders with lead data
- * @param {object} script - The call script
- * @param {object} leadData - The lead data
- * @returns {object} - The processed script
- */
-function processScript(script, leadData) {
-  if (!script || !leadData) return script;
-  
-  const processString = (str) => {
-    if (!str) return str;
-    
-    return str
-      .replace(/{{name}}/g, `${leadData.first_name} ${leadData.last_name}`)
-      .replace(/{{firstName}}/g, leadData.first_name)
-      .replace(/{{lastName}}/g, leadData.last_name)
-      .replace(/{{company}}/g, leadData.company_name || 'your company')
-      .replace(/{{title}}/g, leadData.title || 'your role')
-      .replace(/{{email}}/g, leadData.email || 'your email');
-  };
-  
-  const processedScript = { ...script };
-  
-  // Process greeting and introduction
-  processedScript.greeting = processString(script.greeting);
-  processedScript.introduction = processString(script.introduction);
-  processedScript.closing = processString(script.closing);
-  
-  // Process talking points
-  if (Array.isArray(script.talking_points)) {
-    processedScript.talking_points = script.talking_points.map(point => processString(point));
-  }
-  
-  // Process questions
-  if (Array.isArray(script.questions)) {
-    processedScript.questions = script.questions.map(question => processString(question));
-  }
-  
-  return processedScript;
-}
-
 // Test VAPI configuration
 router.post('/test-vapi', async (req, res) => {
   try {
-    // Get phone number from request or use a default
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { phone_number } = req.body;
     
     if (!phone_number) {
@@ -607,6 +666,9 @@ router.post('/test-vapi', async (req, res) => {
  */
 router.get('/lead/:leadId/status', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { leadId } = req.params;
     const status = await getLeadCallStatus(leadId);
     res.json(status);
@@ -622,6 +684,9 @@ router.get('/lead/:leadId/status', async (req, res) => {
  */
 router.post('/lead/:leadId/mark-called', async (req, res) => {
   try {
+    // Add CORS headers
+    addCorsHeaders(res, req.headers.origin);
+    
     const { leadId } = req.params;
     const { callDetails, reset } = req.body; // Support for reset flag
     const result = await markLeadAsCalled(leadId, { ...callDetails, reset });
@@ -634,6 +699,9 @@ router.post('/lead/:leadId/mark-called', async (req, res) => {
 
 // Update interest status for a lead
 router.post('/lead/:leadId/interest-status', async (req, res) => {
+  // Add CORS headers
+  addCorsHeaders(res, req.headers.origin);
+  
   const { leadId } = req.params;
   const { interestStatus } = req.body;
   
@@ -682,6 +750,57 @@ router.post('/lead/:leadId/interest-status', async (req, res) => {
     console.error('Error updating interest status:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Special debugging endpoint for CORS testing with calls API
+router.get('/cors-check', (req, res) => {
+  // Add CORS headers
+  addCorsHeaders(res, req.headers.origin);
+  
+  console.log('CORS check for calls API', {
+    origin: req.headers.origin,
+    method: req.method,
+    path: req.path,
+    host: req.headers.host,
+  });
+  
+  return res.json({
+    success: true,
+    message: 'CORS check successful for calls API',
+    timestamp: new Date().toISOString(),
+    headers: {
+      cors: {
+        origin: res.getHeader('Access-Control-Allow-Origin'),
+        methods: res.getHeader('Access-Control-Allow-Methods'),
+        headers: res.getHeader('Access-Control-Allow-Headers'),
+        credentials: res.getHeader('Access-Control-Allow-Credentials')
+      },
+      received: {
+        origin: req.headers.origin,
+        host: req.headers.host,
+        referer: req.headers.referer
+      }
+    }
+  });
+});
+
+// Debug route for API path recognition testing
+router.post('/debug', (req, res) => {
+  // Add CORS headers
+  addCorsHeaders(res, req.headers.origin);
+  
+  console.log('Debug call API request received:');
+  console.log('- Headers:', req.headers);
+  console.log('- Body:', req.body);
+  
+  return res.json({
+    success: true,
+    message: 'Debug call API request received',
+    requestDetails: {
+      headers: req.headers,
+      body: req.body
+    }
+  });
 });
 
 module.exports = router; 

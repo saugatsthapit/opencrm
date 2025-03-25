@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { Phone, PhoneCall, History, Settings, List, CheckCircle, Users } from 'lucide-react';
 import CallScriptEditor from '../components/CallScriptEditor';
 import CallHistory from '../components/CallHistory';
-import { defaultCallScript, placeCall, setNgrokUrl, clearNgrokSettings } from '../lib/vapi';
+import { defaultCallScript, placeCall, setNgrokUrl as setVapiNgrokUrl, clearNgrokSettings } from '../lib/vapi';
 import { supabase } from '../lib/supabase';
 import { useLocation } from 'react-router-dom';
+import { getNgrokUrl, getApiBaseUrl, setNgrokUrl as setEnvNgrokUrl } from '../config/env';
 
 interface Lead {
   id: string;
@@ -51,6 +52,9 @@ export default function ColdCalling() {
   const [batchCallInProgress, setBatchCallInProgress] = useState(false);
   const [currentBatchIndex, setCurrentBatchIndex] = useState(-1);
   const [batchCallResults, setBatchCallResults] = useState<any[]>([]);
+
+  // Use our new utility function to get the ngrokUrl
+  const [ngrokUrl, setNgrokUrlState] = useState(getNgrokUrl);
 
   const isProduction = window.location.hostname === 'fastcrm.netlify.app';
   const hasNgrokConfigured = isProduction && localStorage.getItem('ngrok_url');
@@ -163,29 +167,53 @@ export default function ColdCalling() {
     try {
       // Format the phone number before making the call
       const formattedNumber = formatPhoneNumber(phoneNumber);
+      
+      console.log(`[ColdCalling] Initiating call to ${formattedNumber} for lead ${selectedLead}`);
+      console.log(`[ColdCalling] Using ngrok URL: ${ngrokUrl || 'none provided'}`);
 
+      // Try the updated placeCall function with better CORS handling
       const response = await placeCall(
         formattedNumber,
         selectedLead,
-        callScript
+        callScript,
+        ngrokUrl
       );
 
+      console.log(`[ColdCalling] Call initiated successfully:`, response);
       setCallResult(response);
       
+      // Use utility function to get API base URL
+      const apiBaseUrl = getApiBaseUrl();
+      
+      console.log(`[ColdCalling] Marking lead as called using API: ${apiBaseUrl}`);
+      
       // Mark this lead as called using our new endpoint
-      await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          callDetails: {
-            timestamp: new Date().toISOString(),
-            notes: `Call placed to ${formattedNumber}`,
-            success: true
-          }
-        })
-      });
+      try {
+        const markResponse = await fetch(`${apiBaseUrl}/calls/lead/${selectedLead}/mark-called`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            callDetails: {
+              timestamp: new Date().toISOString(),
+              notes: `Call placed to ${formattedNumber}`,
+              success: true
+            }
+          }),
+          credentials: 'include',
+          mode: 'cors'
+        });
+        
+        if (!markResponse.ok) {
+          console.warn(`[ColdCalling] Failed to mark lead as called: ${markResponse.status}`);
+        } else {
+          console.log(`[ColdCalling] Lead marked as called successfully`);
+        }
+      } catch (markError) {
+        console.error(`[ColdCalling] Error marking lead as called:`, markError);
+      }
       
       // Mark this lead as called in the UI
       setLeads(prevLeads => 
@@ -197,21 +225,26 @@ export default function ColdCalling() {
       // Refresh call history after making a call
       setActiveTab('history');
     } catch (err: any) {
-      console.error('Error making call:', err);
+      console.error('[ColdCalling] Error making call:', err);
       
       // Handle network connection errors specifically
-      if (err.message.includes('Failed to fetch')) {
-        setError('Network connection error: Unable to reach the API server. Make sure the server is running at http://localhost:8002 and the Vite proxy is configured correctly.');
+      if (err.message && err.message.includes('Failed to fetch')) {
+        setError(`Network connection error: Unable to reach the API server. Make sure the server is running and CORS is properly configured. Details: ${err.message}`);
+      } else if (err.message && err.message.includes('CORS')) {
+        setError(`CORS error: The server is blocking cross-origin requests. This could be due to misconfigured CORS settings. Try restarting the server or using a different URL. Details: ${err.message}`);
       } else {
         setError(err.message);
       }
       
       // Mark the call as failed in our tracking
       try {
-        await fetch(`/api/v1/calls/lead/${selectedLead}/mark-called`, {
+        // Use utility function to get API base URL
+        const apiBaseUrl = getApiBaseUrl();
+        const markFailedResponse = await fetch(`${apiBaseUrl}/calls/lead/${selectedLead}/mark-called`, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
           },
           body: JSON.stringify({
             callDetails: {
@@ -220,10 +253,16 @@ export default function ColdCalling() {
               success: false,
               error_message: err.message
             }
-          })
+          }),
+          credentials: 'include',
+          mode: 'cors'
         });
+        
+        if (!markFailedResponse.ok) {
+          console.warn(`[ColdCalling] Failed to mark failed call: ${markFailedResponse.status}`);
+        }
       } catch (markErr) {
-        console.error('Error marking lead call as failed:', markErr);
+        console.error('[ColdCalling] Error marking lead call as failed:', markErr);
       }
     } finally {
       setLoading(false);
@@ -232,7 +271,9 @@ export default function ColdCalling() {
 
   const handleSetNgrokUrl = () => {
     if (manualNgrokUrl) {
-      setNgrokUrl(manualNgrokUrl);
+      setVapiNgrokUrl(manualNgrokUrl);
+      setEnvNgrokUrl(manualNgrokUrl);
+      setNgrokUrlState(manualNgrokUrl);
       window.location.reload();
     }
   };
@@ -240,6 +281,7 @@ export default function ColdCalling() {
   const handleClearNgrokSettings = () => {
     clearNgrokSettings();
     setManualNgrokUrl('');
+    setNgrokUrlState('');
     window.location.reload();
   };
 
@@ -286,8 +328,11 @@ export default function ColdCalling() {
       setError(null);
       setBatchCallResults([]);
       
+      // Use utility function to get API base URL
+      const apiBaseUrl = getApiBaseUrl();
+      
       // Call the batch API endpoint
-      const response = await fetch('/api/v1/calls/place-batch', {
+      const response = await fetch(`${apiBaseUrl}/calls/place-batch`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -316,7 +361,7 @@ export default function ColdCalling() {
         if (firstCalledLead) {
           // Mark the lead as called using our new endpoint
           try {
-            await fetch(`/api/v1/calls/lead/${firstCalledLead.lead_id}/mark-called`, {
+            await fetch(`${apiBaseUrl}/calls/lead/${firstCalledLead.lead_id}/mark-called`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json'
@@ -347,7 +392,9 @@ export default function ColdCalling() {
       for (const lead of data.data.leads) {
         if (lead.queued) {
           try {
-            await fetch(`/api/v1/calls/lead/${lead.lead_id}/mark-called`, {
+            // Use utility function to get API base URL
+            const apiBaseUrl = getApiBaseUrl();
+            await fetch(`${apiBaseUrl}/calls/lead/${lead.lead_id}/mark-called`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json'
@@ -426,7 +473,8 @@ export default function ColdCalling() {
       const response = await placeCall(
         formattedNumber,
         lead.id,
-        callScript
+        callScript,
+        ngrokUrl
       );
       
       // Update state
@@ -911,7 +959,7 @@ export default function ColdCalling() {
               <div>
                 <h3 className="text-lg font-semibold mb-4">Call History</h3>
                 {selectedLead ? (
-                  <CallHistory leadId={selectedLead} />
+                  <CallHistory leadId={selectedLead} ngrokUrl={ngrokUrl} />
                 ) : (
                   <p className="text-gray-500">Please select a lead to view call history.</p>
                 )}
