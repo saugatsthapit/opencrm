@@ -17,6 +17,7 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const { Call, CallHistory } = require('../models');
 const { saveSequenceStep } = require('../services/workflowService');
+const { getDbClient } = require('../config/supabase.js');
 require('dotenv').config();
 
 const router = express.Router();
@@ -508,30 +509,150 @@ router.post('/vapi-webhook', async (req, res) => {
     
     console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
     
-    // Process the webhook
-    const result = await handleVapiWebhook(req.body);
+    // Check if we have messageResponse format (new format) or the older message format
+    const messageData = req.body.messageResponse ? req.body.messageResponse : req.body;
     
-    if (result.error) {
-      console.warn('Warning processing webhook:', result.error);
-      // Still return 200 to VAPI to avoid retries
+    // Determine webhook type based on content
+    let webhookType;
+    let callId;
+    let leadId;
+    let summary;
+    let recordingUrl;
+    let transcript;
+    let messages;
+    
+    // Extract call ID and other data
+    if (messageData.assistant && messageData.assistantId) {
+      // New format
+      callId = messageData.callId || '';
+      leadId = messageData.metadata?.lead_id || '';
+      
+      // Check for end-of-call-report
+      if (messageData.message && messageData.message.type === 'end-of-call-report') {
+        webhookType = 'end-of-call-report';
+        summary = messageData.message.summary || '';
+        recordingUrl = messageData.message.recordingUrl || '';
+        transcript = messageData.message.transcript || '';
+        messages = messageData.message.messages || [];
+      } else if (messageData.message && messageData.message.type === 'status-update') {
+        webhookType = 'status-update';
+        const status = messageData.message.status || '';
+        console.log(`Status update for call ${callId}: ${status}`);
+      }
+    } else if (messageData.message && messageData.message.type) {
+      // Old format
+      webhookType = messageData.message.type;
+      callId = messageData.message.call?.id || '';
+      leadId = messageData.message.call?.metadata?.lead_id || '';
+      
+      if (webhookType === 'end-of-call-report') {
+        summary = messageData.message.summary || '';
+        recordingUrl = messageData.message.recordingUrl || '';
+        transcript = messageData.message.transcript || '';
+        messages = messageData.message.messages || [];
+      }
+    }
+    
+    console.log(`Webhook type: ${webhookType}, Call ID: ${callId}, Lead ID: ${leadId}`);
+    
+    if (!callId) {
+      console.warn('No call ID found in webhook data');
       return res.status(200).json({
         success: false,
-        message: result.error
+        message: 'Missing call ID in webhook data'
       });
+    }
+    
+    // Process the webhook based on type
+    if (webhookType === 'end-of-call-report') {
+      // Extract the recording URLs from the message
+      const recordingUrl = messageData.message?.recordingUrl || messageData.message?.artifact?.recordingUrl || null;
+      const stereoRecordingUrl = messageData.message?.stereoRecordingUrl || messageData.message?.artifact?.stereoRecordingUrl || null;
+      
+      // Extract cost information
+      const cost = messageData.message?.cost || 0;
+      const costBreakdown = messageData.message?.costBreakdown || null;
+      const durationSeconds = messageData.message?.durationSeconds || 0;
+      
+      // Store the call summary and update call status
+      const callResult = await getDbClient()
+        .from('call_tracking')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          recording_url: recordingUrl,
+          stereo_recording_url: stereoRecordingUrl,
+          summary: messageData.message?.summary || null,
+          ended_reason: messageData.message?.endedReason || null,
+          duration: durationSeconds,
+          cost: cost,
+          cost_breakdown: costBreakdown
+        })
+        .eq('call_id', callId)
+        .select()
+        .single();
+      
+      if (callResult.error) {
+        console.error('Error updating call with end-of-call report:', callResult.error);
+      } else if (callResult.data) {
+        // Extract transcript and messages from the webhook data
+        const transcript = messageData.message?.transcript || messageData.message?.artifact?.transcript || null;
+        const messages = messageData.message?.messages || messageData.message?.artifact?.messages || null;
+        const analysis = messageData.message?.analysis || null;
+        
+        // Store the transcript if available
+        if (transcript || messages) {
+          const transcriptResult = await getDbClient()
+            .from('call_conversations')
+            .insert({
+              call_tracking_id: callResult.data.id,
+              transcript: transcript,
+              messages: messages,
+              analysis: analysis,
+              created_at: new Date().toISOString()
+            });
+            
+          if (transcriptResult.error) {
+            console.error('Error storing call transcript:', transcriptResult.error);
+          } else {
+            console.log(`Stored transcript and messages for call ${callId}`);
+          }
+        }
+        
+        console.log(`Successfully processed end-of-call report for ${callId}`);
+      }
+    } else if (webhookType === 'status-update') {
+      // Update call status
+      const status = messageData.message.status || 'unknown';
+      const statusResult = await getDbClient()
+        .from('call_tracking')
+        .update({
+          status: status,
+          updated_at: new Date().toISOString(),
+          ...(status === 'in-progress' && { started_at: new Date().toISOString() }),
+          ...(status === 'ended' && { completed_at: new Date().toISOString() })
+        })
+        .eq('call_id', callId);
+        
+      if (statusResult.error) {
+        console.error('Error updating call status:', statusResult.error);
+      } else {
+        console.log(`Updated status for call ${callId} to ${status}`);
+      }
     }
     
     // Return success response
     return res.status(200).json({
       success: true,
-      message: 'Webhook processed successfully'
+      message: 'Webhook processed successfully',
+      webhookType
     });
   } catch (error) {
     console.error('Error processing VAPI webhook:', error);
     // Always return 200 for webhooks, even on errors
-    // This prevents VAPI from retrying the webhook
     return res.status(200).json({
       success: false,
-      message: error.message || 'Failed to process webhook'
+      error: error.message
     });
   }
 });
@@ -569,7 +690,7 @@ router.get('/status/:callId', async (req, res) => {
 });
 
 /**
- * Get call history for a lead
+ * Get call history for a specific lead
  */
 router.get('/history/:leadId', async (req, res) => {
   try {
@@ -578,53 +699,67 @@ router.get('/history/:leadId', async (req, res) => {
     
     const { leadId } = req.params;
     
-    if (!supabase) {
-      console.warn('Supabase client not available, returning mock call history');
-      // Return mock data for development
-      return res.json({
-        success: true,
-        calls: [
-          {
-            id: 'mock-call-1',
-            lead_id: leadId,
-            call_id: 'mock-vapi-call-1',
-            status: 'completed',
-            created_at: new Date().toISOString(),
-            conversations: [
-              {
-                transcript: 'This is a mock transcript for development.',
-                recording_url: 'https://example.com/mock-recording.mp3'
-              }
-            ]
-          }
-        ]
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Lead ID is required'
       });
     }
     
-    const { data, error } = await supabase
+    console.log(`Fetching call history for lead ${leadId}`);
+    
+    // Get call history with conversations
+    const { data, error } = await getDbClient()
       .from('call_tracking')
       .select(`
-        *,
-        conversations:call_conversations(*)
+        id,
+        call_id,
+        lead_id,
+        phone_number,
+        status,
+        created_at,
+        started_at,
+        completed_at,
+        failed_at,
+        recording_url,
+        stereo_recording_url,
+        notes,
+        interest_status,
+        duration,
+        cost,
+        cost_breakdown,
+        ended_reason,
+        summary,
+        metadata,
+        conversations:call_conversations(
+          id,
+          transcript,
+          conversation_data,
+          messages,
+          analysis,
+          created_at
+        )
       `)
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false });
     
     if (error) {
       console.error('Error fetching call history:', error);
-      throw error;
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch call history'
+      });
     }
     
-    res.json({
+    return res.status(200).json({
       success: true,
-      calls: data
+      data: data || []
     });
   } catch (error) {
-    console.error('Error fetching call history:', error);
-    res.status(500).json({
+    console.error('Error getting call history:', error);
+    return res.status(500).json({
       success: false,
-      message: 'Failed to fetch call history',
-      error: error.message
+      error: error.message || 'Failed to get call history'
     });
   }
 });

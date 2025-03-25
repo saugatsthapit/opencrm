@@ -18,10 +18,18 @@ type Call = {
   status: string;
   duration: number;
   recording_url: string;
+  stereo_recording_url?: string;
   created_at: string;
   started_at: string;
   completed_at: string;
   failed_at: string;
+  summary?: string;
+  ended_reason?: string;
+  interest_status?: string;
+  notes?: string;
+  cost?: number;
+  cost_breakdown?: any;
+  metadata?: any;
   conversations: Conversation[];
 };
 
@@ -29,14 +37,16 @@ type Conversation = {
   id: string;
   transcript: string;
   conversation_data: any;
+  messages?: any[];
   created_at: string;
+  analysis?: any;
 };
 
 export default function CallHistory({ leadId, limit = 5, showAll = false, ngrokUrl }: CallHistoryProps) {
   const [calls, setCalls] = useState<Call[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [expandedCalls, setExpandedCalls] = useState<Record<string, boolean>>({});
+  const [expandedCalls, setExpandedCalls] = useState<Record<string, boolean | string>>({});
   
   useEffect(() => {
     async function fetchCalls() {
@@ -211,39 +221,265 @@ export default function CallHistory({ leadId, limit = 5, showAll = false, ngrokU
             
             {expandedCalls[call.id] && (
               <div className="px-4 py-3 bg-white border-t border-gray-200">
+                <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <h4 className="font-medium mb-2">Call Details</h4>
+                    <div className="border border-gray-200 rounded p-3 text-sm">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="text-gray-500">Duration:</div>
+                        <div>{formatDuration(call.duration || 0)}</div>
+                        
+                        <div className="text-gray-500">Status:</div>
+                        <div>{call.status}</div>
+                        
+                        <div className="text-gray-500">Started:</div>
+                        <div>{formatTime(call.started_at)}</div>
+                        
+                        <div className="text-gray-500">Ended:</div>
+                        <div>{formatTime(call.completed_at)}</div>
+                        
+                        {call.ended_reason && (
+                          <>
+                            <div className="text-gray-500">End Reason:</div>
+                            <div>{call.ended_reason}</div>
+                          </>
+                        )}
+                        
+                        {call.metadata && (
+                          <>
+                            <div className="text-gray-500">Lead ID:</div>
+                            <div>{call.metadata.lead_id || 'N/A'}</div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <h4 className="font-medium mb-2">Recordings</h4>
+                    <div className="border border-gray-200 rounded p-3">
+                      {call.recording_url ? (
+                        <div className="space-y-2">
+                          <div>
+                            <audio 
+                              controls 
+                              className="w-full" 
+                              src={call.recording_url}
+                            >
+                              Your browser does not support the audio element.
+                            </audio>
+                            <div className="text-xs text-gray-500 mt-1">Mono Recording</div>
+                          </div>
+                          
+                          {call.stereo_recording_url && (
+                            <div>
+                              <audio 
+                                controls 
+                                className="w-full" 
+                                src={call.stereo_recording_url}
+                              >
+                                Your browser does not support the audio element.
+                              </audio>
+                              <div className="text-xs text-gray-500 mt-1">Stereo Recording (AI + Customer separated)</div>
+                            </div>
+                          )}
+                          
+                          <div className="mt-2 flex space-x-2">
+                            <a 
+                              href={call.recording_url} 
+                              target="_blank"
+                              rel="noopener noreferrer" 
+                              className="text-blue-500 hover:text-blue-700 text-sm flex items-center"
+                            >
+                              <Download className="w-3 h-3 mr-1" />
+                              Download Mono
+                            </a>
+                            
+                            {call.stereo_recording_url && (
+                              <a 
+                                href={call.stereo_recording_url} 
+                                target="_blank"
+                                rel="noopener noreferrer" 
+                                className="text-blue-500 hover:text-blue-700 text-sm flex items-center"
+                              >
+                                <Download className="w-3 h-3 mr-1" />
+                                Download Stereo
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 py-2">No recordings available</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                
+                {call.summary && (
+                  <div className="mb-4">
+                    <h4 className="font-medium mb-2">Call Summary</h4>
+                    <div className="border border-gray-200 bg-yellow-50 rounded p-3">
+                      {call.summary}
+                    </div>
+                  </div>
+                )}
+                
+                {call.notes && (
+                  <div className="mb-4">
+                    <h4 className="font-medium mb-2">Notes</h4>
+                    <div className="border border-gray-200 bg-gray-50 rounded p-3">
+                      {call.notes}
+                    </div>
+                  </div>
+                )}
+                
+                {call.interest_status && (
+                  <div className="mb-4">
+                    <h4 className="font-medium mb-2">Interest Level</h4>
+                    <div className={`inline-block px-3 py-1 rounded-full text-sm ${
+                      call.interest_status === 'green' ? 'bg-green-100 text-green-800' :
+                      call.interest_status === 'yellow' ? 'bg-yellow-100 text-yellow-800' :
+                      call.interest_status === 'red' ? 'bg-red-100 text-red-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {call.interest_status.charAt(0).toUpperCase() + call.interest_status.slice(1)}
+                    </div>
+                  </div>
+                )}
+                
+                {call.cost !== undefined && (
+                  <div className="mb-4">
+                    <h4 className="font-medium mb-2">Call Costs</h4>
+                    <div className="border border-gray-200 rounded p-3 text-sm">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <div className="text-gray-500">Total Cost:</div>
+                        <div>${call.cost.toFixed(4)}</div>
+                        
+                        {call.cost_breakdown && (
+                          <>
+                            {call.cost_breakdown.stt !== undefined && (
+                              <>
+                                <div className="text-gray-500">Speech-to-Text:</div>
+                                <div>${call.cost_breakdown.stt.toFixed(4)}</div>
+                              </>
+                            )}
+                            
+                            {call.cost_breakdown.llm !== undefined && (
+                              <>
+                                <div className="text-gray-500">LLM:</div>
+                                <div>${call.cost_breakdown.llm.toFixed(4)}</div>
+                              </>
+                            )}
+                            
+                            {call.cost_breakdown.tts !== undefined && (
+                              <>
+                                <div className="text-gray-500">Text-to-Speech:</div>
+                                <div>${call.cost_breakdown.tts.toFixed(4)}</div>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
                 {call.conversations && call.conversations.length > 0 ? (
                   <div>
-                    <h4 className="font-medium mb-2">Call Transcript</h4>
-                    <div className="border border-gray-200 rounded p-3 max-h-96 overflow-y-auto">
-                      <pre className="text-sm whitespace-pre-wrap font-sans">
-                        {call.conversations[0].transcript || 'No transcript available'}
-                      </pre>
-                    </div>
-                    
-                    {call.conversations[0].conversation_data && (
-                      <div className="mt-4">
-                        <h4 className="font-medium mb-2">Conversation Details</h4>
-                        <div className="space-y-2">
-                          {Array.isArray(call.conversations[0].conversation_data) && 
-                            call.conversations[0].conversation_data.map((turn: any, i: number) => (
-                              <div 
-                                key={i} 
-                                className={`p-2 rounded ${
-                                  turn.role === 'assistant' 
-                                    ? 'bg-blue-50 border-l-2 border-blue-300' 
-                                    : 'bg-gray-50 border-l-2 border-gray-300'
-                                }`}
-                              >
-                                <div className="text-xs font-semibold mb-1">
-                                  {turn.role === 'assistant' ? 'AI Assistant' : 'Lead'}
-                                </div>
-                                <div className="text-sm">{turn.content}</div>
-                              </div>
-                            ))
-                          }
-                        </div>
+                    <h4 className="font-medium mb-2">Conversation</h4>
+                    <div className="border border-gray-200 rounded">
+                      <div className="flex border-b border-gray-200">
+                        <button 
+                          className={`px-4 py-2 text-sm font-medium ${
+                            expandedCalls[`${call.id}-tab`] !== 'structured' ? 
+                            'bg-blue-50 border-b-2 border-blue-500' : 
+                            'text-gray-500'
+                          }`}
+                          onClick={() => setExpandedCalls(prev => ({
+                            ...prev, 
+                            [`${call.id}-tab`]: 'messages'
+                          }))}
+                        >
+                          Messages
+                        </button>
+                        <button 
+                          className={`px-4 py-2 text-sm font-medium ${
+                            expandedCalls[`${call.id}-tab`] === 'structured' ? 
+                            'bg-blue-50 border-b-2 border-blue-500' : 
+                            'text-gray-500'
+                          }`}
+                          onClick={() => setExpandedCalls(prev => ({
+                            ...prev, 
+                            [`${call.id}-tab`]: 'structured'
+                          }))}
+                        >
+                          Raw Transcript
+                        </button>
                       </div>
-                    )}
+                      
+                      {expandedCalls[`${call.id}-tab`] !== 'structured' ? (
+                        <div className="p-3">
+                          {call.conversations[0].messages && Array.isArray(call.conversations[0].messages) && call.conversations[0].messages.length > 0 ? (
+                            <div className="space-y-2">
+                              {call.conversations[0].messages.map((msg: any, i: number) => (
+                                <div 
+                                  key={i} 
+                                  className={`p-2 rounded ${
+                                    msg.role === 'bot' || msg.role === 'assistant' || msg.role === 'system'
+                                      ? 'bg-blue-50 border-l-2 border-blue-300 ml-8' 
+                                      : 'bg-gray-50 border-l-2 border-gray-300 mr-8'
+                                  }`}
+                                >
+                                  <div className="text-xs font-semibold mb-1 flex justify-between">
+                                    <span>
+                                      {msg.role === 'bot' || msg.role === 'assistant' ? 'AI Assistant' : 
+                                       msg.role === 'system' ? 'System' : 'Customer'}
+                                    </span>
+                                    {(msg.time || msg.timestamp) && (
+                                      <span className="text-gray-500">
+                                        {new Date(msg.time || msg.timestamp).toLocaleTimeString()}
+                                      </span>
+                                    )}
+                                    {msg.duration && (
+                                      <span className="text-gray-500 ml-2">
+                                        ({(msg.duration / 1000).toFixed(1)}s)
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-sm">{msg.message || msg.content}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : call.conversations[0].conversation_data && Array.isArray(call.conversations[0].conversation_data) ? (
+                            <div className="space-y-2">
+                              {call.conversations[0].conversation_data.map((turn: any, i: number) => (
+                                <div 
+                                  key={i} 
+                                  className={`p-2 rounded ${
+                                    turn.role === 'assistant' 
+                                      ? 'bg-blue-50 border-l-2 border-blue-300 ml-8' 
+                                      : 'bg-gray-50 border-l-2 border-gray-300 mr-8'
+                                  }`}
+                                >
+                                  <div className="text-xs font-semibold mb-1">
+                                    {turn.role === 'assistant' ? 'AI Assistant' : 'Customer'}
+                                  </div>
+                                  <div className="text-sm">{turn.content}</div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-gray-500 py-2">No structured messages available</div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="p-3 max-h-96 overflow-y-auto">
+                          <pre className="text-sm whitespace-pre-wrap font-sans">
+                            {call.conversations[0].transcript || 'No transcript available'}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="text-gray-500 py-2">No transcript available for this call.</div>
