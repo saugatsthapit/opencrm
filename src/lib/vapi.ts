@@ -76,7 +76,8 @@ export const placeCall = async (
   script: any,
   ngrokUrl?: string,
   leadSequenceId?: string,
-  stepId?: string
+  stepId?: string,
+  selectedAssistantId?: string
 ) => {
   try {
     // Check if we're on production without a properly configured ngrok
@@ -118,23 +119,29 @@ export const placeCall = async (
     console.log(`[vapi] Request payload:`, { 
       phoneNumber, 
       leadId: lead.id, 
-      scriptLength: JSON.stringify(script).length 
+      scriptLength: JSON.stringify(script).length,
+      selectedAssistantId
     });
 
     // Make API request to our endpoint
+    const requestBody = {
+      phone_number: phoneNumber,
+      lead,
+      script,
+      lead_sequence_id: leadSequenceId,
+      step_id: stepId,
+      assistant_id: selectedAssistantId
+    };
+    
+    console.log(`[vapi] Full request body:`, JSON.stringify(requestBody, null, 2));
+
     const response = await fetch(baseUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify({
-        phone_number: phoneNumber,
-        lead,
-        script,
-        lead_sequence_id: leadSequenceId,
-        step_id: stepId
-      }),
+      body: JSON.stringify(requestBody),
       credentials: 'include',
       mode: 'cors',
     });

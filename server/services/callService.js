@@ -97,6 +97,8 @@ const formatPhoneNumber = (phoneNumber) => {
  */
 const makeVapiCall = async (phoneNumber, leadId, callScript = null, options = {}) => {
   try {
+    console.log('makeVapiCall called with options:', options);
+    
     // Ensure we use full URL for webhook
     const appUrl = process.env.VITE_APP_URL || process.env.APP_URL;
     const ngrokUrl = process.env.NGROK_URL;
@@ -110,10 +112,28 @@ const makeVapiCall = async (phoneNumber, leadId, callScript = null, options = {}
       formattedPhoneNumber = phoneNumber.startsWith('1') ? `+${phoneNumber}` : `+1${phoneNumber}`;
     }
     
+    // Use assistant ID from call script if provided, otherwise use from options or env
+    const finalAssistantId = (callScript && callScript.assistant_id) ? callScript.assistant_id : 
+                            (options.assistant_id || process.env.VITE_VAPI_ASSISTANT_ID);
+    
+    console.log('-------- ASSISTANT ID INFO --------');
+    console.log('Using assistant ID:', finalAssistantId);
+    console.log('Options passed to makeVapiCall:', JSON.stringify(options, null, 2));
+    console.log('Default assistant ID from env:', process.env.VITE_VAPI_ASSISTANT_ID);
+    if (callScript) {
+      console.log('Voice selected in script:', callScript.voice);
+      console.log('Assistant ID from script:', callScript.assistant_id || 'Not specified');
+      console.log('Script details:', JSON.stringify(callScript, null, 2));
+    }
+    console.log('Selection explanation:', (callScript && callScript.assistant_id) ? 
+      'Using assistant ID from script' : 
+      (options.assistant_id ? 'Using assistant ID from options' : 'Using default assistant ID from env'));
+    console.log('-----------------------------------');
+    
     // Initialize payload with required parameters
     const callPayload = {
       phoneNumberId: process.env.VITE_VAPI_PHONE_NUMBER_ID,
-      assistantId: process.env.VITE_VAPI_ASSISTANT_ID,
+      assistantId: finalAssistantId,  // This is the key that VAPI expects
       customer: {
         number: formattedPhoneNumber
       },
@@ -193,7 +213,7 @@ const makeVapiCall = async (phoneNumber, leadId, callScript = null, options = {}
  * @param {string} script - The call script configuration (not used - using VAPI assistant config)
  * @returns {object} - The call tracking information
  */
-const placeCall = async (phone_number, lead, script) => {
+const placeCall = async (phone_number, lead, script, options = {}) => {
   try {
     console.log(`Call request received for ${phone_number}`, {
       lead_id: typeof lead === 'object' ? lead.id : lead,
@@ -244,14 +264,17 @@ const placeCall = async (phone_number, lead, script) => {
     console.log(`Attempting to call ${phone_number} for lead ${typeof leadData === 'object' ? leadData.id : lead}...`);
     
     // Make the call using our enhanced helper function
-    const callData = await makeVapiCall(phone_number, leadId, script);
+    const callData = await makeVapiCall(phone_number, leadId, script, {
+      ...options,
+      assistant_id: options.assistant_id  // Pass the assistant_id directly
+    });
     
     return {
       success: true,
       call_id: callData.id,
       status: callData.status,
       customer: callData.customer,
-      assistant_id: callData.assistantId,
+      assistant_id: callData.assistantId,  // Return the assistant ID in the response
       phone_number_id: callData.phoneNumberId,
       metadata: callData.metadata
     };
@@ -267,7 +290,8 @@ const placeCall = async (phone_number, lead, script) => {
  */
 const handleVapiWebhook = async (webhookData) => {
   try {
-    console.log('Processing VAPI webhook:', JSON.stringify(webhookData, null, 2));
+    // Remove verbose webhook logging
+    // console.log('Processing VAPI webhook:', JSON.stringify(webhookData, null, 2));
     
     if (!webhookData || !webhookData.message) {
       console.error('Invalid webhook data format');
@@ -374,8 +398,6 @@ const handleStatusUpdate = async (message, tracking, leadId) => {
   if (error) {
     console.error('Error updating call status:', error);
   }
-  
-  console.log(`Call ${call.id} status updated to ${status}`);
 };
 
 // Handle end-of-call report with transcript, recording URL, and summary
@@ -421,8 +443,6 @@ const handleEndOfCallReport = async (message, tracking, leadId) => {
     success: true,
     recording: recordingUrl
   });
-  
-  console.log(`Call ${call.id} completed, lead ${leadId} marked as called:`, result);
 };
 
 // Handle hang notifications (AI failed to respond)
@@ -441,8 +461,6 @@ const handleHangNotification = async (message, tracking, leadId) => {
   if (error) {
     console.error('Error updating call with hang notification:', error);
   }
-  
-  console.log(`Hang notification for call ${call.id}`);
 };
 
 /**
@@ -693,7 +711,8 @@ const markLeadAsCalled = async (leadId, callDetails = {}) => {
 
 // Handle call status webhook
 const handleCallStatus = async (webhookData) => {
-  console.log('Processing call status webhook:', webhookData);
+  // Remove verbose logging
+  // console.log('Processing call status webhook:', webhookData);
   try {
     const { CallSid, CallStatus, From, To } = webhookData;
     
@@ -717,7 +736,8 @@ const handleCallStatus = async (webhookData) => {
       return { error: 'Database update failed' };
     }
     
-    console.log(`Call ${CallSid} status updated to ${CallStatus}`);
+    // Removing verbose log
+    // console.log(`Call ${CallSid} status updated to ${CallStatus}`);
     return { success: true };
   } catch (error) {
     console.error('Error in handleCallStatus:', error);
@@ -727,7 +747,8 @@ const handleCallStatus = async (webhookData) => {
 
 // Handle recording webhook
 const handleRecording = async (webhookData) => {
-  console.log('Processing recording webhook:', webhookData);
+  // Remove verbose logging
+  // console.log('Processing recording webhook:', webhookData);
   try {
     const { CallSid, RecordingUrl, RecordingStatus } = webhookData;
     
@@ -750,7 +771,8 @@ const handleRecording = async (webhookData) => {
       return { error: 'Database update failed' };
     }
     
-    console.log(`Recording URL for call ${CallSid} updated: ${RecordingUrl}`);
+    // Removing verbose log
+    // console.log(`Recording URL for call ${CallSid} updated: ${RecordingUrl}`);
     return { success: true };
   } catch (error) {
     console.error('Error in handleRecording:', error);
@@ -760,7 +782,8 @@ const handleRecording = async (webhookData) => {
 
 // Create TwiML for a specific tracking ID
 const getTwiMlForTracking = async (trackingId) => {
-  console.log(`Generating TwiML for tracking ID: ${trackingId}`);
+  // Remove verbose log
+  // console.log(`Generating TwiML for tracking ID: ${trackingId}`);
   
   // This is a placeholder implementation - would normally generate TwiML for Twilio
   return `
@@ -772,7 +795,8 @@ const getTwiMlForTracking = async (trackingId) => {
 
 // Create a bridge to VAPI for a specific tracking ID
 const createVapiBridge = async (trackingId) => {
-  console.log(`Creating VAPI bridge for tracking ID: ${trackingId}`);
+  // Remove verbose log
+  // console.log(`Creating VAPI bridge for tracking ID: ${trackingId}`);
   
   // This is a placeholder implementation
   return {

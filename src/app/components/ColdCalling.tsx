@@ -16,6 +16,22 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
+// Define mapping between voice options and assistant IDs
+const VOICE_ASSISTANT_MAPPING: {[key: string]: string} = {
+  // Male voices
+  'antoni': '9b2258fc-05ac-4993-a569-eb1b3ecb3974', // Antoni (Male)
+  'josh': '4560e69f-2a08-43b5-898a-1dc7a30aca8c',   // Josh (Male)
+  'arnold': 'f3203622-3046-4dfd-96e1-65a4e03cdcd7', // Arnold (Male)
+  'adam': 'ca0d1cc1-d40c-4fed-b006-502b7f4ceb04',   // Adam (Male)
+  
+  // Female voices
+  'rachel': '7d38bf23-7cc9-4a85-b8c1-a00ac9c20a16', // Rachel (Female)
+  'sam': 'ec4a5e28-bd25-4b83-ada7-b388cd66daf9',    // Sam (Female)
+  
+  // Default fallback
+  'default': '7d38bf23-7cc9-4a85-b8c1-a00ac9c20a16' // Default Assistant ID
+};
+
 // Define interfaces for our component
 interface Lead {
   id: string;
@@ -40,6 +56,7 @@ interface CallScript {
   closing: string;
   voice?: string;
   ai_model?: string;
+  assistant_id?: string;
 }
 
 interface CallResult {
@@ -82,7 +99,8 @@ export default function ColdCallingPage() {
     ],
     closing: 'Thank you for your time today. I\'d be happy to schedule a follow-up call to discuss this further.',
     voice: 'rachel',
-    ai_model: 'gpt-4'
+    ai_model: 'gpt-4',
+    assistant_id: VOICE_ASSISTANT_MAPPING['rachel'] // Set assistant ID based on default voice
   });
   
   // Fetch leads and call scripts on component mount
@@ -154,7 +172,8 @@ export default function ColdCallingPage() {
             questions: newScript.questions,
             closing: newScript.closing,
             voice: newScript.voice,
-            ai_model: newScript.ai_model
+            ai_model: newScript.ai_model,
+            assistant_id: newScript.assistant_id
           }
         ])
         .select();
@@ -209,6 +228,14 @@ export default function ColdCallingPage() {
         throw new Error('Please select a call script');
       }
       
+      // Ensure we have the correct assistant ID for the voice
+      if (script.voice && !script.assistant_id) {
+        script.assistant_id = VOICE_ASSISTANT_MAPPING[script.voice] || VOICE_ASSISTANT_MAPPING.default;
+      }
+      
+      console.log('Using script:', script);
+      console.log('With assistant ID:', script.assistant_id);
+      
       // Use custom phone number if provided, otherwise use lead's phone
       const phoneNumber = customPhoneNumber || lead.phone;
       
@@ -216,16 +243,23 @@ export default function ColdCallingPage() {
         throw new Error('No phone number provided. Please enter a custom phone number.');
       }
       
+      // Log the complete payload we're sending to the API
+      const payload = {
+        phone_number: phoneNumber,
+        lead_id: lead.id,
+        call_script: script,
+        assistant_id: script.assistant_id // Explicitly include the assistant_id here as well
+      };
+      console.log('[ASSISTANT ID DEBUG] API Payload:', JSON.stringify(payload, null, 2));
+      console.log('[ASSISTANT ID DEBUG] Script voice:', script.voice);
+      console.log('[ASSISTANT ID DEBUG] Script assistant_id:', script.assistant_id);
+      
       const response = await fetch('/api/v1/calls/place', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          phone_number: phoneNumber,
-          lead_id: lead.id,
-          call_script: script
-        }),
+        body: JSON.stringify(payload),
       });
       
       const data = await response.json();
@@ -272,6 +306,21 @@ export default function ColdCallingPage() {
       if (!script) {
         throw new Error('Please select a call script');
       }
+      
+      // Ensure we have the correct assistant ID for the voice
+      if (script.voice && !script.assistant_id) {
+        script.assistant_id = VOICE_ASSISTANT_MAPPING[script.voice] || VOICE_ASSISTANT_MAPPING.default;
+      }
+      
+      console.log('Batch calling with script:', script);
+      console.log('With assistant ID:', script.assistant_id);
+      
+      // Add more detailed debugging
+      console.log('[ASSISTANT ID DEBUG] Batch calling script:', JSON.stringify(script, null, 2));
+      console.log('[ASSISTANT ID DEBUG] Voice selected:', script.voice);
+      console.log('[ASSISTANT ID DEBUG] Assistant ID used:', script.assistant_id);
+      console.log('[ASSISTANT ID DEBUG] Voice key exists in mapping:', script.voice in VOICE_ASSISTANT_MAPPING);
+      console.log('[ASSISTANT ID DEBUG] Expected assistant ID for voice:', VOICE_ASSISTANT_MAPPING[script.voice]);
       
       // Call the batch API endpoint
       const response = await fetch('/api/v1/calls/place-batch', {
@@ -367,6 +416,21 @@ export default function ColdCallingPage() {
       if (!script) {
         throw new Error('Please select a call script');
       }
+      
+      // Ensure we have the correct assistant ID for the voice
+      if (script.voice && !script.assistant_id) {
+        script.assistant_id = VOICE_ASSISTANT_MAPPING[script.voice] || VOICE_ASSISTANT_MAPPING.default;
+      }
+      
+      console.log('Calling next lead with script:', script);
+      console.log('With assistant ID:', script.assistant_id);
+      
+      // Add more detailed debugging
+      console.log('[ASSISTANT ID DEBUG] Next call script:', JSON.stringify(script, null, 2));
+      console.log('[ASSISTANT ID DEBUG] Voice selected:', script.voice);
+      console.log('[ASSISTANT ID DEBUG] Assistant ID used:', script.assistant_id);
+      console.log('[ASSISTANT ID DEBUG] Voice key exists in mapping:', script.voice in VOICE_ASSISTANT_MAPPING);
+      console.log('[ASSISTANT ID DEBUG] Expected assistant ID for voice:', VOICE_ASSISTANT_MAPPING[script.voice]);
       
       // Use lead's phone number
       const phoneNumber = lead.phone;
@@ -756,7 +820,23 @@ export default function ColdCallingPage() {
                 id="voice"
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
                 value={newScript.voice}
-                onChange={(e) => setNewScript({ ...newScript, voice: e.target.value })}
+                onChange={(e) => {
+                  const selectedVoice = e.target.value;
+                  // Get corresponding assistant ID from mapping
+                  const assistantId = VOICE_ASSISTANT_MAPPING[selectedVoice] || VOICE_ASSISTANT_MAPPING.default;
+                  
+                  console.log('[ASSISTANT ID DEBUG] Selected voice:', selectedVoice);
+                  console.log('[ASSISTANT ID DEBUG] Mapped to assistant ID:', assistantId);
+                  console.log('[ASSISTANT ID DEBUG] Full mapping object:', VOICE_ASSISTANT_MAPPING);
+                  console.log('[ASSISTANT ID DEBUG] Voice key exists in mapping:', selectedVoice in VOICE_ASSISTANT_MAPPING);
+                  
+                  // Update both voice and assistant ID
+                  setNewScript({ 
+                    ...newScript, 
+                    voice: selectedVoice,
+                    assistant_id: assistantId
+                  });
+                }}
               >
                 <option value="rachel">Rachel (Female)</option>
                 <option value="antoni">Antoni (Male)</option>
@@ -779,6 +859,21 @@ export default function ColdCallingPage() {
                 <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Faster)</option>
                 <option value="claude-3">Claude 3 (Natural)</option>
               </select>
+            </div>
+            
+            <div>
+              <Label htmlFor="assistant">Assistant ID</Label>
+              <Input
+                id="assistant"
+                className="flex h-10 w-full"
+                value={newScript.assistant_id}
+                onChange={(e) => setNewScript({ ...newScript, assistant_id: e.target.value })}
+                placeholder="Enter VAPI Assistant ID"
+                disabled={true}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Assistant ID for {newScript.voice} voice (automatically selected)
+              </p>
             </div>
           </div>
         </CardContent>

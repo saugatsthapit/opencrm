@@ -126,6 +126,13 @@ const processScript = (script, lead) => {
  */
 router.post('/', async (req, res) => {
   try {
+    // Add these debug logs
+    console.log('\n=== CALL REQUEST DEBUG ===');
+    console.log('Assistant ID from request:', req.body.assistant_id);
+    
+    const { phone_number, lead, script, lead_sequence_id, step_id, assistant_id } = req.body;
+    console.log('Destructured assistant_id:', assistant_id);
+    
     // Log the entire request for debugging
     console.log('Received request to /api/v1/calls:');
     console.log('- Headers:', req.headers);
@@ -133,11 +140,10 @@ router.post('/', async (req, res) => {
     console.log('- Path:', req.path);
     console.log('- Method:', req.method);
     console.log('- Body:', JSON.stringify(req.body, null, 2));
+    console.log('Assistant ID from request:', req.body.assistant_id);
     
     // Add CORS headers
     addCorsHeaders(res, req.headers.origin);
-    
-    const { phone_number, lead, script, lead_sequence_id, step_id } = req.body;
     
     if (!phone_number) {
       return res.status(400).json({
@@ -150,13 +156,6 @@ router.post('/', async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Lead information is required'
-      });
-    }
-    
-    if (!script) {
-      return res.status(400).json({
-        success: false,
-        error: 'Call script is required'
       });
     }
     
@@ -177,10 +176,23 @@ router.post('/', async (req, res) => {
     // Process the script with lead data
     const processedScript = processScript(script, leadData);
     
-    // Place the call - always pass just the leadId
-    const result = await placeCall(phone_number, leadId, processedScript);
+    // Add this debug log before placeCall
+    console.log('Calling placeCall with options:', {
+      assistant_id,
+      lead_sequence_id,
+      step_id
+    });
     
-    console.log('Call placed successfully:', result);
+    // Place the call - always pass just the leadId
+    const result = await placeCall(phone_number, leadId, processedScript, {
+      assistant_id,
+      lead_sequence_id,
+      step_id
+    });
+    
+    // Add this debug log after placeCall
+    console.log('placeCall result:', result);
+    console.log('=========================\n');
     
     // Return success response
     return res.status(200).json({
@@ -245,8 +257,11 @@ router.post('/place', callValidation.validateOutboundCall, async (req, res) => {
     // Update the call script with lead data
     const processedScript = processScript(call_script, leadData);
     
+    // Extract assistant_id from either call_script or request body
+    const assistant_id = call_script.assistant_id || req.body.assistant_id;
+    
     // Place the call - pass just the leadId instead of the full leadData object
-    const result = await placeCall(phone_number, lead_id, processedScript);
+    const result = await placeCall(phone_number, lead_id, processedScript, { assistant_id });
     
     // Return success response
     return res.status(200).json({
@@ -332,8 +347,11 @@ router.post('/place-batch', callValidation.validateOutboundCall, async (req, res
       const processedScript = processScript(call_script, leadData);
       
       try {
-        // Place the call with just the lead ID
-        const result = await placeCall(firstLead.phone, firstLead.lead_id, processedScript);
+        // Extract assistant_id
+        const assistant_id = call_script.assistant_id || req.body.assistant_id;
+        
+        // Place the call with just the lead ID and pass the assistant_id
+        const result = await placeCall(firstLead.phone, firstLead.lead_id, processedScript, { assistant_id });
         firstLead.call_result = result;
         firstLead.queued = false;
         firstLead.message = 'Call initiated successfully';
@@ -506,7 +524,7 @@ router.post('/vapi-webhook', async (req, res) => {
     // Add CORS headers
     addCorsHeaders(res, req.headers.origin);
     
-    console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
+    // console.log('Received VAPI webhook:', JSON.stringify(req.body, null, 2));
     
     // Process the webhook
     const result = await handleVapiWebhook(req.body);

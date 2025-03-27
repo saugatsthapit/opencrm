@@ -46,18 +46,24 @@ export default function ColdCalling() {
   const [error, setError] = useState<string | null>(null);
   const [manualNgrokUrl, setManualNgrokUrl] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [selectedAssistantId, setSelectedAssistantId] = useState<string>('f76e2b49-9b62-463f-88eb-1085c16f47c6');
   
-  // Batch calling state
-  const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
-  const [batchCallInProgress, setBatchCallInProgress] = useState(false);
-  const [currentBatchIndex, setCurrentBatchIndex] = useState(-1);
-  const [batchCallResults, setBatchCallResults] = useState<any[]>([]);
+  // Add console logging for assistant selection
+  useEffect(() => {
+    console.log('[ColdCalling] Selected Assistant ID:', selectedAssistantId);
+  }, [selectedAssistantId]);
 
   // Use our new utility function to get the ngrokUrl
   const [ngrokUrl, setNgrokUrlState] = useState(getNgrokUrl);
 
   const isProduction = window.location.hostname === 'fastcrm.netlify.app';
   const hasNgrokConfigured = isProduction && localStorage.getItem('ngrok_url');
+
+  // Create an array of assistants
+  const assistants = [
+    { id: 'bdae6e5a-931b-477b-b9f2-421a776adb0d', name: 'Male Voice' },
+    { id: 'f76e2b49-9b62-463f-88eb-1085c16f47c6', name: 'Female Voice' }
+  ];
 
   useEffect(() => {
     // Fetch leads when component mounts
@@ -75,10 +81,10 @@ export default function ColdCalling() {
         setActiveTab('calls');
       } else if (location.state.selectedLeads && location.state.selectedLeads.length > 0) {
         // If multiple leads were selected for batch calling
-        setSelectedLeads(location.state.selectedLeads);
+        // setSelectedLeads(location.state.selectedLeads);
         
         // Set the active tab to 'batch'
-        setActiveTab('batch');
+        // setActiveTab('batch');
       }
     }
   }, [location.state, leads]);
@@ -146,6 +152,11 @@ export default function ColdCalling() {
       return;
     }
     
+    if (!selectedAssistantId) {
+      setError('Please select an assistant first.');
+      return;
+    }
+    
     // Find the selected lead to get its call status and interest level
     const lead = leads.find(l => l.id === selectedLead);
     
@@ -170,13 +181,17 @@ export default function ColdCalling() {
       
       console.log(`[ColdCalling] Initiating call to ${formattedNumber} for lead ${selectedLead}`);
       console.log(`[ColdCalling] Using ngrok URL: ${ngrokUrl || 'none provided'}`);
+      console.log('Making call with assistantIDDD:', selectedAssistantId);
 
       // Try the updated placeCall function with better CORS handling
       const response = await placeCall(
         formattedNumber,
         selectedLead,
         callScript,
-        ngrokUrl
+        ngrokUrl,
+        undefined,
+        undefined,
+        selectedAssistantId
       );
 
       console.log(`[ColdCalling] Call initiated successfully:`, response);
@@ -291,212 +306,6 @@ export default function ColdCalling() {
     return `${lead.first_name || ''} ${lead.last_name || ''}`.trim() || lead.email || 'Unknown';
   };
   
-  // Toggle a lead's selection for batch calling
-  const toggleLeadSelection = (leadId: string) => {
-    setSelectedLeads(prev => {
-      if (prev.includes(leadId)) {
-        return prev.filter(id => id !== leadId);
-      } else {
-        return [...prev, leadId];
-      }
-    });
-  };
-  
-  // Helper to check if a lead has a valid phone number
-  const hasValidPhone = (leadId: string): boolean => {
-    const lead = leads.find(l => l.id === leadId);
-    return !!lead?.mobile_phone1;
-  };
-  
-  // Start batch calling process
-  const startBatchCalling = async () => {
-    if (selectedLeads.length === 0) {
-      setError('Please select at least one lead to call');
-      return;
-    }
-    
-    // Check if any of the selected leads have phone numbers
-    const leadsWithPhones = selectedLeads.filter(id => hasValidPhone(id));
-    
-    if (leadsWithPhones.length === 0) {
-      setError('None of the selected leads have phone numbers. Please add phone numbers first.');
-      return;
-    }
-    
-    try {
-      setLoading(true);
-      setError(null);
-      setBatchCallResults([]);
-      
-      // Use utility function to get API base URL
-      const apiBaseUrl = getApiBaseUrl();
-      
-      // Call the batch API endpoint
-      const response = await fetch(`${apiBaseUrl}/calls/place-batch`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          lead_ids: leadsWithPhones, // Only send leads with phone numbers
-          call_script: callScript
-        }),
-      });
-      
-      const data = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(data.message || 'Failed to initiate batch calls');
-      }
-      
-      // Set batch calling in progress
-      setBatchCallInProgress(true);
-      
-      // If first call was placed, set current index to 0
-      if (data.data.first_call_placed) {
-        setCurrentBatchIndex(0);
-        
-        // Find the lead that was called and mark it
-        const firstCalledLead = data.data.leads.find((lead: any) => !lead.queued && lead.success);
-        if (firstCalledLead) {
-          // Mark the lead as called using our new endpoint
-          try {
-            await fetch(`${apiBaseUrl}/calls/lead/${firstCalledLead.lead_id}/mark-called`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                callDetails: {
-                  timestamp: new Date().toISOString(),
-                  notes: `Batch call placed to lead`,
-                  success: true
-                }
-              })
-            });
-          } catch (err) {
-            console.error('Error marking lead as called:', err);
-          }
-        }
-      }
-      
-      // Store the batch results
-      setBatchCallResults(data.data.leads.map((lead: any) => ({
-        lead_id: lead.lead_id,
-        queued: lead.queued,
-        success: lead.success,
-        error: lead.error
-      })));
-      
-      // Mark all queued leads as called with queued status
-      for (const lead of data.data.leads) {
-        if (lead.queued) {
-          try {
-            // Use utility function to get API base URL
-            const apiBaseUrl = getApiBaseUrl();
-            await fetch(`${apiBaseUrl}/calls/lead/${lead.lead_id}/mark-called`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                callDetails: {
-                  timestamp: new Date().toISOString(),
-                  notes: 'Queued in batch call',
-                  success: true,
-                  status: 'queued'
-                }
-              })
-            });
-          } catch (err) {
-            console.error(`Error marking lead ${lead.lead_id} as queued:`, err);
-          }
-        }
-      }
-      
-      // Update UI to show which leads have been called
-      setLeads(prevLeads => 
-        prevLeads.map(l => ({
-          ...l,
-          called: data.data.leads.some((called: any) => 
-            called.lead_id === l.id && (called.success || called.queued)
-          )
-        }))
-      );
-    } catch (err: any) {
-      console.error('Error starting batch calls:', err);
-      setError(err.message);
-      setBatchCallInProgress(false);
-    } finally {
-      setLoading(false);
-    }
-  };
-  
-  // Call the next lead in the batch
-  const callNextLead = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const nextIndex = currentBatchIndex + 1;
-      
-      if (nextIndex >= selectedLeads.length) {
-        // End of batch
-        setBatchCallInProgress(false);
-        setCurrentBatchIndex(-1);
-        setLoading(false);
-        return;
-      }
-      
-      // Get the next lead ID
-      const nextLeadId = selectedLeads[nextIndex];
-      
-      // Skip leads without phone numbers
-      if (!hasValidPhone(nextLeadId)) {
-        console.warn(`Skipping lead ${nextLeadId} due to missing phone number`);
-        // Recursively try the next lead
-        setCurrentBatchIndex(nextIndex);
-        setLoading(false);
-        callNextLead();
-        return;
-      }
-      
-      // Find the lead
-      const lead = leads.find(l => l.id === nextLeadId);
-      
-      if (!lead) {
-        throw new Error('Next lead not found');
-      }
-      
-      // Make the call (we already verified phone exists) and format the number
-      const formattedNumber = formatPhoneNumber(lead.mobile_phone1!);
-      const response = await placeCall(
-        formattedNumber,
-        lead.id,
-        callScript,
-        ngrokUrl
-      );
-      
-      // Update state
-      setCurrentBatchIndex(nextIndex);
-      setBatchCallResults(prev => [...prev, response]);
-      setCallResult(response);
-      
-      // Mark this lead as called
-      setLeads(prevLeads => 
-        prevLeads.map(l => 
-          l.id === lead.id ? { ...l, called: true } : l
-        )
-      );
-      
-    } catch (err: any) {
-      console.error('Error initiating next call:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Update phone number when selecting a lead
   const handleLeadSelection = (leadId: string) => {
     setSelectedLead(leadId);
@@ -593,42 +402,15 @@ export default function ColdCalling() {
             <p className="text-gray-500">No leads found. Please add some leads first.</p>
           ) : (
             <>
-              {activeTab === 'batch' && (
-                <div className="mb-4">
-                  <p className="text-sm mb-2">Selected: {selectedLeads.length} leads</p>
-                  <div className="flex justify-between items-center">
-                    <button
-                      className="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded"
-                      onClick={() => setSelectedLeads(leads.map(l => l.id))}
-                    >
-                      Select All
-                    </button>
-                    <button
-                      className="text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded"
-                      onClick={() => setSelectedLeads([])}
-                    >
-                      Clear Selection
-                    </button>
-                  </div>
-                </div>
-              )}
-              
               <ul className="divide-y divide-gray-200">
                 {leads.map((lead) => (
                   <li 
                     key={lead.id} 
                     className={`py-2 px-2 cursor-pointer hover:bg-gray-50 ${
-                      (selectedLead === lead.id && activeTab !== 'batch') || 
-                      (activeTab === 'batch' && selectedLeads.includes(lead.id)) 
-                        ? 'bg-blue-50' 
-                        : ''
+                      selectedLead === lead.id ? 'bg-blue-50' : ''
                     }`}
                     onClick={() => {
-                      if (activeTab === 'batch') {
-                        toggleLeadSelection(lead.id);
-                      } else {
-                        handleLeadSelection(lead.id);
-                      }
+                      handleLeadSelection(lead.id);
                     }}
                   >
                     <div className="flex justify-between items-center">
@@ -641,29 +423,6 @@ export default function ColdCalling() {
                           <div className="text-sm text-red-500 italic">No phone number</div>
                         )}
                       </div>
-                      {activeTab === 'batch' && (
-                        <div className="flex items-center">
-                          {lead.called && (
-                            <span className="inline-block rounded-full bg-green-100 text-green-800 px-2 py-0.5 text-xs mr-2">
-                              Called
-                            </span>
-                          )}
-                          <input 
-                            type="checkbox" 
-                            className="h-4 w-4"
-                            checked={selectedLeads.includes(lead.id)}
-                            onChange={(e) => {
-                              if (e.target.checked) {
-                                setSelectedLeads(prev => [...prev, lead.id]);
-                              } else {
-                                setSelectedLeads(prev => prev.filter(id => id !== lead.id));
-                              }
-                              e.stopPropagation();
-                            }}
-                            onClick={e => e.stopPropagation()}
-                          />
-                        </div>
-                      )}
                     </div>
                   </li>
                 ))}
@@ -682,13 +441,6 @@ export default function ColdCalling() {
             >
               <Phone size={18} className="mr-2" />
               Single Call
-            </button>
-            <button
-              className={`px-4 py-2 flex items-center ${activeTab === 'batch' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
-              onClick={() => setActiveTab('batch')}
-            >
-              <Users size={18} className="mr-2" />
-              Batch Calling
             </button>
             <button
               className={`px-4 py-2 flex items-center ${activeTab === 'script' ? 'border-b-2 border-blue-500 text-blue-500' : 'text-gray-500'}`}
@@ -711,6 +463,27 @@ export default function ColdCalling() {
             {activeTab === 'calls' && (
               <div>
                 <h3 className="text-lg font-semibold mb-4">Place a Call</h3>
+                
+                <div className="mb-4">
+                  <p className="font-semibold mb-2">Select an Assistant</p>
+                  <div className="flex space-x-4">
+                    {assistants.map((assistant) => (
+                      <button
+                        key={assistant.id}
+                        className={`px-3 py-2 rounded border ${
+                          selectedAssistantId === assistant.id ? 'bg-blue-100 border-blue-400' : 'border-gray-300'
+                        }`}
+                        onClick={() => {
+                          console.log('[ColdCalling] Selecting assistant:', assistant.name, assistant.id);
+                          setSelectedAssistantId(assistant.id);
+                        }}
+                      >
+                        {assistant.name}
+                      </button>
+                    ))}
+                  </div>
+                  {!selectedAssistantId && <p className="text-sm text-red-500 mt-1">No assistant selected</p>}
+                </div>
                 
                 {selectedLead ? (
                   <div>
@@ -823,127 +596,6 @@ export default function ColdCalling() {
                   </div>
                 ) : (
                   <p className="text-gray-500">Please select a lead from the list to make a call.</p>
-                )}
-              </div>
-            )}
-            
-            {activeTab === 'batch' && (
-              <div>
-                <h3 className="text-lg font-semibold mb-4">Batch Calling</h3>
-                
-                <div className="mb-4">
-                  <p>Select multiple leads from the list to include in your batch call.</p>
-                  
-                  {/* Count and show warning for leads without phone numbers */}
-                  {selectedLeads.length > 0 && (() => {
-                    const leadsWithoutPhone = selectedLeads.filter(id => {
-                      const lead = leads.find(l => l.id === id);
-                      return !lead?.mobile_phone1;
-                    });
-                    
-                    if (leadsWithoutPhone.length > 0) {
-                      return (
-                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                          <p className="text-sm text-yellow-700">
-                            <span className="font-medium">Warning:</span> {leadsWithoutPhone.length} of {selectedLeads.length} selected 
-                            {leadsWithoutPhone.length === 1 ? ' lead does ' : ' leads do '} 
-                            not have a phone number and will be skipped.
-                          </p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                  
-                  {batchCallInProgress && (
-                    <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded">
-                      <h4 className="font-medium text-blue-800">Batch Calling In Progress</h4>
-                      <p className="text-sm text-blue-700 mt-1">
-                        Currently calling lead {currentBatchIndex + 1} of {selectedLeads.length}
-                      </p>
-                      <p className="text-sm text-blue-700">
-                        Lead: {getLeadName(selectedLeads[currentBatchIndex])}
-                      </p>
-                    </div>
-                  )}
-                  
-                  {callResult && (
-                    <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
-                      <h4 className="font-medium text-green-800">Call Initiated!</h4>
-                      <p className="text-sm text-green-700">
-                        Call ID: {callResult.call_id || callResult.id}
-                      </p>
-                      <p className="text-sm text-green-700">
-                        Status: {callResult.status || 'Initiated'}
-                      </p>
-                    </div>
-                  )}
-                </div>
-                
-                <div className="flex mt-6">
-                  {batchCallInProgress ? (
-                    <button
-                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
-                      onClick={callNextLead}
-                      disabled={loading || currentBatchIndex >= selectedLeads.length - 1}
-                    >
-                      {loading ? (
-                        <>
-                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Calling Next...
-                        </>
-                      ) : (
-                        <>
-                          <PhoneCall size={18} className="mr-2" />
-                          Call Next Lead
-                        </>
-                      )}
-                    </button>
-                  ) : (
-                    <button
-                      className="bg-blue-500 text-white px-4 py-2 rounded flex items-center"
-                      onClick={startBatchCalling}
-                      disabled={loading || selectedLeads.length === 0}
-                    >
-                      {loading ? (
-                        <>
-                          <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Processing...
-                        </>
-                      ) : (
-                        <>
-                          <List size={18} className="mr-2" />
-                          Start Batch Calling ({selectedLeads.length} leads)
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-                
-                {batchCallResults.length > 0 && (
-                  <div className="mt-6">
-                    <h4 className="font-medium mb-2">Batch Call Results:</h4>
-                    <ul className="divide-y divide-gray-200 border rounded">
-                      {batchCallResults.map((result, index) => (
-                        <li key={index} className="p-3">
-                          <div className="flex items-center">
-                            <CheckCircle size={16} className="text-green-500 mr-2" />
-                            <p className="text-sm">
-                              Lead: {getLeadName(selectedLeads[index])} - 
-                              Call ID: {result.call_id || result.id} - 
-                              Status: {result.status || 'Initiated'}
-                            </p>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
                 )}
               </div>
             )}

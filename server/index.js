@@ -70,9 +70,19 @@ app.options('*', (req, res) => {
 
 app.use(express.json());
 
+// Add before the routes
+app.use((req, res, next) => {
+  console.log('\n=== INCOMING REQUEST ===');
+  console.log(`${req.method} ${req.url}`);
+  console.log('Headers:', req.headers);
+  console.log('Body:', req.body);
+  console.log('======================\n');
+  next();
+});
+
 // Routes
-app.use('/api/v1/email', emailRoutes);
 app.use('/api/v1/calls', callRoutes);
+app.use('/api/v1/email', emailRoutes);
 
 // Add a specific CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
