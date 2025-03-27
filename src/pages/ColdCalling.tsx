@@ -38,7 +38,10 @@ interface Lead {
 export default function ColdCalling() {
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('calls');
-  const [callScript, setCallScript] = useState(defaultCallScript);
+  const [callScript, setCallScript] = useState({
+    ...defaultCallScript,
+    assistant_id: 'f76e2b49-9b62-463f-88eb-1085c16f47c6' // Default to Female Voice
+  });
   const [leads, setLeads] = useState<Lead[]>([]);
   const [selectedLead, setSelectedLead] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -59,10 +62,15 @@ export default function ColdCalling() {
   const isProduction = window.location.hostname === 'fastcrm.netlify.app';
   const hasNgrokConfigured = isProduction && localStorage.getItem('ngrok_url');
 
-  // Create an array of assistants
-  const assistants = [
-    { id: 'bdae6e5a-931b-477b-b9f2-421a776adb0d', name: 'Male Voice' },
-    { id: 'f76e2b49-9b62-463f-88eb-1085c16f47c6', name: 'Female Voice' }
+
+  // Create a more comprehensive list of assistants
+  const enhancedAssistants = [
+    { id: 'f76e2b49-9b62-463f-88eb-1085c16f47c6', name: 'Rachel (Female)', voice: 'rachel' },
+    { id: 'ec4a5e28-bd25-4b83-ada7-b388cd66daf9', name: 'Sam (Female)', voice: 'sam' },
+    { id: '9b2258fc-05ac-4993-a569-eb1b3ecb3974', name: 'Antoni (Male)', voice: 'antoni' },
+    { id: 'bdae6e5a-931b-477b-b9f2-421a776adb0d', name: 'Josh (Male)', voice: 'josh' },
+    { id: 'f3203622-3046-4dfd-96e1-65a4e03cdcd7', name: 'Arnold (Male)', voice: 'arnold' },
+    { id: 'ca0d1cc1-d40c-4fed-b006-502b7f4ceb04', name: 'Adam (Male)', voice: 'adam' }
   ];
 
   useEffect(() => {
@@ -182,6 +190,16 @@ export default function ColdCalling() {
       console.log(`[ColdCalling] Initiating call to ${formattedNumber} for lead ${selectedLead}`);
       console.log(`[ColdCalling] Using ngrok URL: ${ngrokUrl || 'none provided'}`);
       console.log('Making call with assistantIDDD:', selectedAssistantId);
+
+      // Replace this with enhanced logging
+      console.log(`[ColdCalling] Initiating call to ${formattedNumber} for lead ${selectedLead}`);
+      console.log(`[ColdCalling] Using ngrok URL: ${ngrokUrl || 'none provided'}`);
+      console.log(`[ColdCalling] Selected Assistant ID: ${selectedAssistantId}`);
+      console.log(`[ColdCalling] Call script:`, JSON.stringify({
+        ...callScript,
+        voice: callScript.voice,
+        assistant_id: selectedAssistantId // Ensure it's explicitly assigned in the debug log
+      }, null, 2));
 
       // Try the updated placeCall function with better CORS handling
       const response = await placeCall(
@@ -391,6 +409,56 @@ export default function ColdCalling() {
         </div>
       )}
       
+      <div className="w-full max-w-7xl mx-auto mb-6">
+        <div className="bg-white rounded-lg shadow p-4">
+          <h2 className="text-xl font-semibold mb-3">Assistant Voice Selection</h2>
+          <p className="text-gray-600 mb-4">Select the AI assistant voice that will be used for all calls.</p>
+          
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            {enhancedAssistants.map((assistant) => (
+              <button
+                key={assistant.id}
+                className={`px-4 py-3 rounded-md border transition-colors ${
+                  selectedAssistantId === assistant.id 
+                    ? 'bg-blue-100 border-blue-500 text-blue-800' 
+                    : 'border-gray-300 hover:bg-gray-50'
+                }`}
+                onClick={() => {
+                  console.log('[ColdCalling] Selecting assistant:', assistant.name, assistant.id);
+                  setSelectedAssistantId(assistant.id);
+                  
+                  // Also update callScript with the voice if needed
+                  if (assistant.voice && callScript) {
+                    setCallScript({
+                      ...callScript,
+                      voice: assistant.voice,
+                      assistant_id: assistant.id
+                    });
+                  }
+                }}
+              >
+                <div className="flex items-center">
+                  <span className={`w-3 h-3 rounded-full mr-2 ${
+                    assistant.name.includes('Male') ? 'bg-blue-500' : 'bg-pink-500'
+                  }`}></span>
+                  <span>{assistant.name}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          
+          {!selectedAssistantId && (
+            <p className="text-sm text-red-500 mt-2">Please select an assistant voice before making a call</p>
+          )}
+          
+          {selectedAssistantId && (
+            <p className="text-sm text-green-600 mt-2">
+              Selected voice: {enhancedAssistants.find(a => a.id === selectedAssistantId)?.name}
+            </p>
+          )}
+        </div>
+      </div>
+      
       <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* Leads List */}
         <div className="col-span-1 bg-white rounded-lg shadow p-4 max-h-[calc(100vh-180px)] overflow-y-auto">
@@ -463,27 +531,6 @@ export default function ColdCalling() {
             {activeTab === 'calls' && (
               <div>
                 <h3 className="text-lg font-semibold mb-4">Place a Call</h3>
-                
-                <div className="mb-4">
-                  <p className="font-semibold mb-2">Select an Assistant</p>
-                  <div className="flex space-x-4">
-                    {assistants.map((assistant) => (
-                      <button
-                        key={assistant.id}
-                        className={`px-3 py-2 rounded border ${
-                          selectedAssistantId === assistant.id ? 'bg-blue-100 border-blue-400' : 'border-gray-300'
-                        }`}
-                        onClick={() => {
-                          console.log('[ColdCalling] Selecting assistant:', assistant.name, assistant.id);
-                          setSelectedAssistantId(assistant.id);
-                        }}
-                      >
-                        {assistant.name}
-                      </button>
-                    ))}
-                  </div>
-                  {!selectedAssistantId && <p className="text-sm text-red-500 mt-1">No assistant selected</p>}
-                </div>
                 
                 {selectedLead ? (
                   <div>
